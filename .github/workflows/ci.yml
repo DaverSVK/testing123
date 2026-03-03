@@ -1,0 +1,148 @@
+name: Assignment 1 - CI Pipeline
+
+on:
+  push:
+    branches: [ zadanie_cv1 ]
+  pull_request:
+    branches: [ zadanie_cv1 ]
+
+env:
+  BUILD_DIR: build
+  ELF_NAME: vrs_cv2_ll_programming.elf
+
+jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 1: Build the firmware with arm-none-eabi-gcc
+  # ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: "Build (arm-none-eabi-gcc)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ARM GCC toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi
+
+      - name: Show toolchain version
+        run: arm-none-eabi-gcc --version
+
+      - name: Build firmware
+        id: build
+        run: |
+          set -o pipefail
+          make -f Makefile.ci all 2>&1 | tee build.log
+          echo "build_exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Print build summary
+        if: always()
+        run: |
+          echo "──────────────────────────────────────────────"
+          echo "  BUILD LOG"
+          echo "──────────────────────────────────────────────"
+          cat build.log
+          echo "──────────────────────────────────────────────"
+          if [ -f "$BUILD_DIR/$ELF_NAME" ]; then
+            echo "Binary size:"
+            arm-none-eabi-size "$BUILD_DIR/$ELF_NAME"
+          fi
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 30
+
+      - name: Upload ELF artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-elf
+          path: ${{ env.BUILD_DIR }}/${{ env.ELF_NAME }}
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 2: Static analysis – parse assignment.h and main.c without a compiler
+  # ─────────────────────────────────────────────────────────────────────────────
+  static-tests:
+    name: "Static Analysis Tests"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run static analysis tests
+        run: |
+          python3 -m pytest tests/test_assignment.py -v \
+            --tb=short \
+            --no-header \
+            -p no:cacheprovider \
+            2>&1 | tee static-test-results.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload static test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-test-results
+          path: static-test-results.txt
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 3: Binary analysis – disassemble ELF and verify register usage
+  # ─────────────────────────────────────────────────────────────────────────────
+  binary-tests:
+    name: "Binary Analysis Tests"
+    runs-on: ubuntu-latest
+    needs: build          # only runs if the build succeeded
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ARM binutils
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y binutils-arm-none-eabi python3-pytest
+
+      - name: Download ELF artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-elf
+          path: ${{ env.BUILD_DIR }}
+
+      - name: Disassemble ELF
+        run: |
+          arm-none-eabi-objdump -d "$BUILD_DIR/$ELF_NAME" > disassembly.txt
+          arm-none-eabi-nm --numeric-sort "$BUILD_DIR/$ELF_NAME" > symbols.txt
+
+      - name: Run binary analysis tests
+        run: |
+          python3 -m pytest tests/test_binary.py -v \
+            --tb=short \
+            --no-header \
+            -p no:cacheprovider \
+            2>&1 | tee binary-test-results.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload binary test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-test-results
+          path: |
+            binary-test-results.txt
+            disassembly.txt
+            symbols.txt
+          retention-days: 30

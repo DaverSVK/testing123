@@ -1,0 +1,103 @@
+# =============================================================================
+# Makefile.ci  –  standalone CI build for vrs_cvicenie_1 (STM32F303K8Tx)
+# Usage:  make -f Makefile.ci [all | clean]
+# Requires: arm-none-eabi-gcc, arm-none-eabi-size (binutils-arm-none-eabi)
+# =============================================================================
+
+TARGET   := vrs_cv2_ll_programming
+BUILD    := build
+
+# ── Toolchain ─────────────────────────────────────────────────────────────────
+CC      := arm-none-eabi-gcc
+AS      := arm-none-eabi-gcc -x assembler-with-cpp
+SZ      := arm-none-eabi-size
+
+# ── CPU / FPU flags ───────────────────────────────────────────────────────────
+CPU     := -mcpu=cortex-m4
+FPU     := -mfpu=fpv4-sp-d16
+FLOAT   := -mfloat-abi=hard
+MCU     := $(CPU) -mthumb $(FPU) $(FLOAT)
+
+# ── Preprocessor defines ──────────────────────────────────────────────────────
+DEFS    := \
+  -DSTM32F303x8        \
+  -DDEBUG              \
+  -DUSE_FULL_LL_DRIVER
+
+# ── Include paths ─────────────────────────────────────────────────────────────
+INCS    := \
+  -IInc                                              \
+  -IDrivers/CMSIS/Include                            \
+  -IDrivers/CMSIS/Device/ST/STM32F3xx/Include        \
+  -IDrivers/STM32F3xx_HAL_Driver/Inc                 \
+  -IDrivers/STM32F3xx_HAL_Driver/Inc/Legacy
+
+# ── C compiler flags ──────────────────────────────────────────────────────────
+CFLAGS  := $(MCU) $(DEFS) $(INCS) \
+  -std=gnu11           \
+  -g3                  \
+  -O0                  \
+  -Wall                \
+  -Wextra              \
+  -ffunction-sections  \
+  -fdata-sections
+
+# ── Assembler flags ───────────────────────────────────────────────────────────
+ASFLAGS := $(MCU) -g3 -IStartup
+
+# ── Linker flags ──────────────────────────────────────────────────────────────
+LDSCRIPT := STM32F303K8TX_FLASH.ld
+
+LDFLAGS := $(MCU) \
+  -T$(LDSCRIPT)          \
+  -Wl,--gc-sections      \
+  -Wl,-Map=$(BUILD)/$(TARGET).map,--cref \
+  --specs=nano.specs     \
+  --specs=nosys.specs    \
+  -lm
+
+# ── Source files ──────────────────────────────────────────────────────────────
+C_SOURCES := \
+  Src/main.c                                                  \
+  Src/stm32f3xx_it.c                                          \
+  Src/syscalls.c                                              \
+  Src/sysmem.c                                                \
+  Src/system_stm32f3xx.c                                      \
+  Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_utils.c      \
+  Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_rcc.c        \
+  Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_gpio.c       \
+  Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_exti.c
+
+ASM_SOURCES := \
+  Startup/startup_stm32f303k8tx.s
+
+# ── Object file list ──────────────────────────────────────────────────────────
+OBJECTS := $(addprefix $(BUILD)/, $(C_SOURCES:.c=.o))
+OBJECTS += $(addprefix $(BUILD)/, $(ASM_SOURCES:.s=.o))
+
+# ── Targets ───────────────────────────────────────────────────────────────────
+.PHONY: all clean
+
+all: $(BUILD)/$(TARGET).elf
+	@echo ""
+	@echo "──────────────────────────────────────────────"
+	@echo "  BUILD SUCCESSFUL"
+	@echo "──────────────────────────────────────────────"
+	$(SZ) $<
+
+$(BUILD)/$(TARGET).elf: $(OBJECTS)
+	@mkdir -p $(dir $@)
+	$(CC) $(OBJECTS) $(LDFLAGS) -o $@
+
+# C sources
+$(BUILD)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) -c $(CFLAGS) -Wa,-a,-ad,-alms=$(BUILD)/$(<:.c=.lst) $< -o $@
+
+# Assembly sources
+$(BUILD)/%.o: %.s
+	@mkdir -p $(dir $@)
+	$(AS) -c $(ASFLAGS) $< -o $@
+
+clean:
+	rm -rf $(BUILD)
