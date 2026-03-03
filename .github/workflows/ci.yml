@@ -82,6 +82,9 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install pytest
+        run: pip install pytest
+
       - name: Run static analysis tests
         run: |
           python3 -m pytest tests/test_assignment.py -v \
@@ -111,10 +114,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install ARM binutils
+      - name: Install ARM binutils and pytest
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y binutils-arm-none-eabi python3-pytest
+          sudo apt-get install -y binutils-arm-none-eabi
+          pip install pytest
 
       - name: Download ELF artifact
         uses: actions/download-artifact@v4
