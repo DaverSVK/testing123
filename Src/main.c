@@ -47,12 +47,19 @@ int main(void)
 
   /* Enable clock for GPIO port A*/
 
-	//type your code for GPIOA clock enable here:
+	*RCC_AHBENR_REG |= (1u << 17);		/* IOPAEN – enable GPIOA peripheral clock */
 
 
   /* GPIOA pin 3 and 4 setup */
 
-	//type your code for GPIOA pins setup here:
+	/* PA3 – input (button): MODER bits [7:6] = 00, pull-up PUPDR bits [7:6] = 01 */
+	*GPIOA_MODER_REG &= ~(0x3u << 6);
+	*GPIOA_PUPDR_REG &= ~(0x3u << 6);
+	*GPIOA_PUPDR_REG |=  (0x1u << 6);
+
+	/* PA4 – output (LED): MODER bits [9:8] = 01 (general purpose output), push-pull */
+	*GPIOA_MODER_REG &= ~(0x3u << 8);
+	*GPIOA_MODER_REG |=  (0x1u << 8);
 
 
   while (1)
