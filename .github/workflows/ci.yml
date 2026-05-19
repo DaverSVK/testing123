@@ -150,3 +150,42 @@ jobs:
             disassembly.txt
             symbols.txt
           retention-days: 30
+
+  raspberry-pi-task:
+    name: "Raspberry Pi - STM32 placeholder"
+    runs-on: [self-hosted, Linux, ARM64]
+    needs: static-tests
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show Raspberry Pi info
+        run: |
+          echo "Runner name: $RUNNER_NAME"
+          echo "Runner OS: $RUNNER_OS"
+          echo "Runner arch: $RUNNER_ARCH"
+          hostname
+          uname -a
+          cat /etc/os-release
+
+      - name: Return static table
+        run: |
+          {
+            echo "## Raspberry Pi STM32 task result"
+            echo ""
+            echo "| Item | Result | Status |"
+            echo "|---|---|---|"
+            echo "| Runner | $RUNNER_NAME | OK |"
+            echo "| Hostname | $(hostname) | OK |"
+            echo "| Architecture | $(uname -m) | OK |"
+            echo "| Branch | $GITHUB_REF_NAME | OK |"
+            echo "| Commit | $GITHUB_SHA | OK |"
+            echo "| Static tests | Successful | OK |"
+            echo "| STM32 build | Placeholder only | OK |"
+            echo "| STM32 flash | Placeholder only | OK |"
+            echo "| Final result | Everything is okay | PASS |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Finish
+        run: echo "Everything is okay"
