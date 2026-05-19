@@ -151,41 +151,91 @@ jobs:
             symbols.txt
           retention-days: 30
 
-  raspberry-pi-task:
-    name: "Raspberry Pi - STM32 placeholder"
+  raspberry-build:
+    name: "Raspberry Pi - Build STM32 firmware"
     runs-on: [self-hosted, Linux, ARM64]
-    needs: static-tests
+    needs: [build, static-tests]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show Raspberry Pi info
+      - name: Show Raspberry Pi toolchain info
         run: |
           echo "Runner name: $RUNNER_NAME"
           echo "Runner OS: $RUNNER_OS"
           echo "Runner arch: $RUNNER_ARCH"
           hostname
           uname -a
-          cat /etc/os-release
+          arm-none-eabi-gcc --version
+          arm-none-eabi-size --version
+          arm-none-eabi-objdump --version
 
-      - name: Return static table
+      - name: Clean build directory
         run: |
+          make -f Makefile.ci clean || true
+          rm -rf "$BUILD_DIR"
+
+      - name: Build STM32 firmware on Raspberry Pi
+        run: |
+          set -o pipefail
+          make -f Makefile.ci all 2>&1 | tee raspberry-build.log
+
+      - name: Check ELF output
+        run: |
+          if [ ! -f "$BUILD_DIR/$ELF_NAME" ]; then
+            echo "ELF not found: $BUILD_DIR/$ELF_NAME"
+            exit 1
+          fi
+
+          echo "ELF found:"
+          ls -lh "$BUILD_DIR/$ELF_NAME"
+
+          echo "Binary size:"
+          arm-none-eabi-size "$BUILD_DIR/$ELF_NAME"
+
+      - name: Upload Raspberry Pi build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raspberry-build-log
+          path: raspberry-build.log
+          retention-days: 30
+
+      - name: Upload Raspberry Pi ELF
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: raspberry-firmware-elf
+          path: ${{ env.BUILD_DIR }}/${{ env.ELF_NAME }}
+          retention-days: 30
+
+      - name: Add Raspberry Pi build summary
+        if: always()
+        run: |
+          if [ -f "$BUILD_DIR/$ELF_NAME" ]; then
+            ELF_STATUS="FOUND"
+            SIZE_OUTPUT="$(arm-none-eabi-size "$BUILD_DIR/$ELF_NAME" | tail -n 1)"
+            FINAL_STATUS="PASS"
+          else
+            ELF_STATUS="MISSING"
+            SIZE_OUTPUT="N/A"
+            FINAL_STATUS="FAIL"
+          fi
+
           {
-            echo "## Raspberry Pi STM32 task result"
+            echo "## Raspberry Pi STM32 build result"
             echo ""
             echo "| Item | Result | Status |"
             echo "|---|---|---|"
             echo "| Runner | $RUNNER_NAME | OK |"
             echo "| Hostname | $(hostname) | OK |"
             echo "| Architecture | $(uname -m) | OK |"
+            echo "| Toolchain | arm-none-eabi-gcc | OK |"
             echo "| Branch | $GITHUB_REF_NAME | OK |"
             echo "| Commit | $GITHUB_SHA | OK |"
-            echo "| Static tests | Successful | OK |"
-            echo "| STM32 build | Placeholder only | OK |"
-            echo "| STM32 flash | Placeholder only | OK |"
-            echo "| Final result | Everything is okay | PASS |"
+            echo "| Makefile | Makefile.ci | OK |"
+            echo "| ELF file | $BUILD_DIR/$ELF_NAME | $ELF_STATUS |"
+            echo "| Size | \`$SIZE_OUTPUT\` | INFO |"
+            echo "| Final result | Raspberry Pi STM32 build | $FINAL_STATUS |"
           } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Finish
-        run: echo "Everything is okay"
