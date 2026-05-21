@@ -68,8 +68,8 @@ int main(void)
 	*GPIOA_AFRL_REG &= ~(0xFu << 8);
 	*GPIOA_AFRL_REG |=  (0x7u << 8);
 
-  /* USART2 – 115200 baud @ 8 MHz (BRR = 0x457), 8N1, TX enable */
-	*USART2_BRR_REG = 0x457;
+  /* USART2 – 115200 baud @ 8 MHz (USARTDIV=69.4 → mantissa 69, fraction 7), 8N1, TX enable */
+	*USART2_BRR_REG = (69u << 4) | 7u;
 	*USART2_CR1_REG = (1u << 3) | (1u << 0);	/* TE | UE */
 
   /* Send greeting over debug UART */
