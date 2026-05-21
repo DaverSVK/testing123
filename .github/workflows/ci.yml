@@ -239,6 +239,7 @@ jobs:
             echo "| Size | \`$SIZE_OUTPUT\` | INFO |"
             echo "| Final result | Raspberry Pi STM32 build | $FINAL_STATUS |"
           } >> "$GITHUB_STEP_SUMMARY"
+
   flash-stm32:
     name: "Flash STM32F303K8 firmware"
     runs-on: [self-hosted, Linux, ARM64]
@@ -251,11 +252,6 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install OpenOCD
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y openocd
 
       - name: Download Raspberry Pi ELF artifact
         uses: actions/download-artifact@v4
