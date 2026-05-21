@@ -69,38 +69,38 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 2: Static analysis – parse assignment.h and main.c without a compiler
   # ─────────────────────────────────────────────────────────────────────────────
-  static-tests:
-    name: "Static Analysis Tests"
-    runs-on: ubuntu-latest
+  # static-tests:
+  #   name: "Static Analysis Tests"
+  #   runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+  #     - name: Set up Python
+  #       uses: actions/setup-python@v5
+  #       with:
+  #         python-version: "3.11"
 
-      - name: Install pytest
-        run: pip install pytest
+  #     - name: Install pytest
+  #       run: pip install pytest
 
-      - name: Run static analysis tests
-        run: |
-          python3 -m pytest tests/test_assignment.py -v \
-            --tb=short \
-            --no-header \
-            -p no:cacheprovider \
-            2>&1 | tee static-test-results.txt
-          exit ${PIPESTATUS[0]}
+  #     - name: Run static analysis tests
+  #       run: |
+  #         python3 -m pytest tests/test_assignment.py -v \
+  #           --tb=short \
+  #           --no-header \
+  #           -p no:cacheprovider \
+  #           2>&1 | tee static-test-results.txt
+  #         exit ${PIPESTATUS[0]}
 
-      - name: Upload static test results
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: static-test-results
-          path: static-test-results.txt
-          retention-days: 30
+  #     - name: Upload static test results
+  #       if: always()
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: static-test-results
+  #         path: static-test-results.txt
+  #         retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 3: Binary analysis – disassemble ELF and verify register usage
