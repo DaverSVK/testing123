@@ -271,3 +271,65 @@ jobs:
         run: |
           openocd -f interface/stlink.cfg -f "$STM32_TARGET_CFG" \
             -c "program $BUILD_DIR/$ELF_NAME verify reset exit"
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 6: Read UART output and verify "Hello!" was transmitted
+  # ─────────────────────────────────────────────────────────────────────────────
+  uart-hello-test:
+    name: "UART Hello! Test"
+    runs-on: [self-hosted, Linux, ARM64]
+    needs: flash-stm32
+    if: github.event_name == 'push'
+
+    env:
+      STM32_TARGET_CFG: target/stm32f3x.cfg
+      UART_PORT: /dev/ttyACM0
+      UART_BAUD: "115200"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install pyserial
+        run: pip3 install --quiet pyserial
+
+      - name: Reset MCU and capture UART output
+        run: |
+          python3 - <<'PYEOF'
+          import serial, subprocess, time, sys
+
+          port = "/dev/ttyACM0"
+          baud = 115200
+
+          with serial.Serial(port, baud, timeout=3) as ser:
+              ser.reset_input_buffer()
+              subprocess.run([
+                  "openocd",
+                  "-f", "interface/stlink.cfg",
+                  "-f", "target/stm32f3x.cfg",
+                  "-c", "init",
+                  "-c", "reset run",
+                  "-c", "shutdown",
+              ], check=True, capture_output=True)
+              time.sleep(1)
+              data = ser.read(64).decode("utf-8", errors="replace")
+
+          print(f"Received: {repr(data)}")
+          if "Hello!" not in data:
+              print("FAIL: 'Hello!' not found in UART output")
+              sys.exit(1)
+          print("PASS: 'Hello!' received over debug UART")
+          PYEOF
+
+      - name: Add UART test summary
+        if: always()
+        run: |
+          {
+            echo "## UART Hello! Test"
+            echo ""
+            echo "| Item | Value |"
+            echo "|---|---|"
+            echo "| Port | $UART_PORT |"
+            echo "| Baud | $UART_BAUD |"
+            echo "| Expected | Hello! |"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -22,6 +22,14 @@
 #include "main.h"
 #include "assignment.h"
 
+static void uart_send_str(const char *s)
+{
+	while (*s) {
+		while (!(*USART2_ISR_REG & (1u << 7)));
+		*USART2_TDR_REG = (uint32_t)(*s++);
+	}
+}
+
 int main(void)
 {
   /*
@@ -48,6 +56,24 @@ int main(void)
   /* Enable clock for GPIO port A*/
 
 	*RCC_AHBENR_REG |= (1u << 17);		/* IOPAEN – enable GPIOA peripheral clock */
+
+  /* Enable USART2 clock (APB1ENR bit 17) */
+	*RCC_APB1ENR_REG |= (1u << 17);
+
+  /* PA2 – USART2_TX: alternate function mode (MODER[5:4] = 10) */
+	*GPIOA_MODER_REG &= ~(0x3u << 4);
+	*GPIOA_MODER_REG |=  (0x2u << 4);
+
+  /* PA2 – AF7 (USART2_TX): AFRL[11:8] = 0111 */
+	*GPIOA_AFRL_REG &= ~(0xFu << 8);
+	*GPIOA_AFRL_REG |=  (0x7u << 8);
+
+  /* USART2 – 115200 baud @ 8 MHz (BRR = 0x457), 8N1, TX enable */
+	*USART2_BRR_REG = 0x457;
+	*USART2_CR1_REG = (1u << 3) | (1u << 0);	/* TE | UE */
+
+  /* Send greeting over debug UART */
+	uart_send_str("Hello!\r\n");
 
 
   /* GPIOA pin 3 and 4 setup */

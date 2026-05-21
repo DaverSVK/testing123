@@ -8,6 +8,8 @@
 #ifndef ASSIGNMENT_H_
 #define ASSIGNMENT_H_
 
+#include <stdint.h>
+
 /**
  * 		This header file provides macros to the MCU's registers required for this assignment.
  * 		Your task is to provide their actual implementation so you can use them in application in "main.c"
@@ -34,11 +36,24 @@
 //BRR register
 #define GPIOA_BRR_REG			((volatile uint32_t *)(GPIOA_BASE_ADDR + 0x28))
 
+/* GPIOA Alternate Function Low register */
+#define GPIOA_AFRL_REG			((volatile uint32_t *)(GPIOA_BASE_ADDR + 0x20))
+
 /*Reset clock control register macros */
 //RCC base address
 #define	RCC_BASE_ADDR			0x40021000
 //AHBEN register
 #define	RCC_AHBENR_REG			((volatile uint32_t *)(RCC_BASE_ADDR + 0x14))
+//APB1ENR register
+#define	RCC_APB1ENR_REG			((volatile uint32_t *)(RCC_BASE_ADDR + 0x1C))
+
+/* USART2 registers (debug UART – ST-Link VCP, PA2=TX) */
+#define USART2_BASE_ADDR		0x40004400
+#define USART2_CR1_REG			((volatile uint32_t *)(USART2_BASE_ADDR + 0x00))
+#define USART2_BRR_REG			((volatile uint32_t *)(USART2_BASE_ADDR + 0x0C))
+#define USART2_ISR_REG			((volatile uint32_t *)(USART2_BASE_ADDR + 0x1C))
+#define USART2_TDR_REG			((volatile uint32_t *)(USART2_BASE_ADDR + 0x28))
+
 
 /* LED and button macros */
 #define LED_ON					(*GPIOA_ODR_REG |=  (1u << 4))
