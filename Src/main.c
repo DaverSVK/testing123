@@ -76,10 +76,10 @@ int main(void)
 	  else
 	  {
 		  // 1s delay
-		  LL_mDelay(1000);
+		  LL_mDelay(2000);
 		  LED_ON;
 		  // 1s delay
-		  LL_mDelay(1000);
+		  LL_mDelay(2000);
 		  LED_OFF;
 	  }
   }
