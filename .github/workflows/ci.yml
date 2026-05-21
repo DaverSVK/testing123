@@ -290,9 +290,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install pyserial
-        run: pip3 install --quiet pyserial
-
       - name: Reset MCU and capture UART output
         run: |
           python3 - <<'PYEOF'
