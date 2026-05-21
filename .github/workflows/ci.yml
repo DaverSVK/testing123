@@ -28,7 +28,10 @@ jobs:
           sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi
 
       - name: Show toolchain version
-        run: arm-none-eabi-gcc --version
+        run: |
+          arm-none-eabi-gcc --version
+          arm-none-eabi-size --version
+          arm-none-eabi-strings --version
 
       - name: Build firmware
         id: build
@@ -45,9 +48,22 @@ jobs:
           echo "──────────────────────────────────────────────"
           cat build.log
           echo "──────────────────────────────────────────────"
+
           if [ -f "$BUILD_DIR/$ELF_NAME" ]; then
+            echo "ELF found:"
+            ls -lh "$BUILD_DIR/$ELF_NAME"
+
+            echo ""
             echo "Binary size:"
             arm-none-eabi-size "$BUILD_DIR/$ELF_NAME"
+
+            echo ""
+            echo "ELF checksum:"
+            sha256sum "$BUILD_DIR/$ELF_NAME"
+
+            echo ""
+            echo "Check for Hello string:"
+            arm-none-eabi-strings "$BUILD_DIR/$ELF_NAME" | grep -n "Hello" || true
           fi
 
       - name: Upload build log
@@ -67,7 +83,7 @@ jobs:
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 2: Static analysis – parse assignment.h and main.c without a compiler
+  # JOB 2: Static analysis
   # ─────────────────────────────────────────────────────────────────────────────
   static-tests:
     name: "Static Analysis Tests"
@@ -103,12 +119,12 @@ jobs:
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 3: Binary analysis – disassemble ELF and verify register usage
+  # JOB 3: Binary analysis
   # ─────────────────────────────────────────────────────────────────────────────
   binary-tests:
     name: "Binary Analysis Tests"
     runs-on: ubuntu-latest
-    needs: build          # only runs if the build succeeded
+    needs: build
 
     steps:
       - name: Checkout repository
@@ -151,6 +167,9 @@ jobs:
             symbols.txt
           retention-days: 30
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 4: Build on Raspberry Pi runner
+  # ─────────────────────────────────────────────────────────────────────────────
   raspberry-build:
     name: "Raspberry Pi - Build STM32 firmware"
     runs-on: [self-hosted, Linux, ARM64]
@@ -170,6 +189,7 @@ jobs:
           arm-none-eabi-gcc --version
           arm-none-eabi-size --version
           arm-none-eabi-objdump --version
+          arm-none-eabi-strings --version
 
       - name: Clean build directory
         run: |
@@ -191,8 +211,29 @@ jobs:
           echo "ELF found:"
           ls -lh "$BUILD_DIR/$ELF_NAME"
 
+          echo ""
           echo "Binary size:"
           arm-none-eabi-size "$BUILD_DIR/$ELF_NAME"
+
+          echo ""
+          echo "ELF checksum:"
+          sha256sum "$BUILD_DIR/$ELF_NAME"
+
+          echo ""
+          echo "Check for Hello string:"
+          arm-none-eabi-strings "$BUILD_DIR/$ELF_NAME" | grep -n "Hello" || {
+            echo "ERROR: Hello not found in ELF."
+            echo "This firmware probably cannot pass the UART Hello test."
+            exit 1
+          }
+
+          echo ""
+          echo "ELF file type:"
+          file "$BUILD_DIR/$ELF_NAME"
+
+          echo ""
+          echo "Last symbols:"
+          arm-none-eabi-nm --numeric-sort "$BUILD_DIR/$ELF_NAME" | tail -30
 
       - name: Upload Raspberry Pi build log
         if: always()
@@ -216,10 +257,20 @@ jobs:
           if [ -f "$BUILD_DIR/$ELF_NAME" ]; then
             ELF_STATUS="FOUND"
             SIZE_OUTPUT="$(arm-none-eabi-size "$BUILD_DIR/$ELF_NAME" | tail -n 1)"
+            CHECKSUM="$(sha256sum "$BUILD_DIR/$ELF_NAME" | awk '{print $1}')"
+
+            if arm-none-eabi-strings "$BUILD_DIR/$ELF_NAME" | grep -q "Hello"; then
+              HELLO_STATUS="FOUND"
+            else
+              HELLO_STATUS="MISSING"
+            fi
+
             FINAL_STATUS="PASS"
           else
             ELF_STATUS="MISSING"
             SIZE_OUTPUT="N/A"
+            CHECKSUM="N/A"
+            HELLO_STATUS="N/A"
             FINAL_STATUS="FAIL"
           fi
 
@@ -231,15 +282,19 @@ jobs:
             echo "| Runner | $RUNNER_NAME | OK |"
             echo "| Hostname | $(hostname) | OK |"
             echo "| Architecture | $(uname -m) | OK |"
-            echo "| Toolchain | arm-none-eabi-gcc | OK |"
             echo "| Branch | $GITHUB_REF_NAME | OK |"
             echo "| Commit | $GITHUB_SHA | OK |"
             echo "| Makefile | Makefile.ci | OK |"
             echo "| ELF file | $BUILD_DIR/$ELF_NAME | $ELF_STATUS |"
             echo "| Size | \`$SIZE_OUTPUT\` | INFO |"
+            echo "| SHA256 | \`$CHECKSUM\` | INFO |"
+            echo "| Hello string | $HELLO_STATUS | INFO |"
             echo "| Final result | Raspberry Pi STM32 build | $FINAL_STATUS |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 5: Flash STM32F303K8
+  # ─────────────────────────────────────────────────────────────────────────────
   flash-stm32:
     name: "Flash STM32F303K8 firmware"
     runs-on: [self-hosted, Linux, ARM64]
@@ -253,11 +308,46 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Check required tools
+        run: |
+          openocd --version
+          arm-none-eabi-size --version
+          arm-none-eabi-strings --version
+
       - name: Download Raspberry Pi ELF artifact
         uses: actions/download-artifact@v4
         with:
           name: raspberry-firmware-elf
           path: ${{ env.BUILD_DIR }}
+
+      - name: Verify ELF before flashing
+        run: |
+          echo "Downloaded files:"
+          find "$BUILD_DIR" -maxdepth 2 -type f -print -exec ls -lh {} \;
+
+          echo ""
+          echo "ELF path:"
+          ls -lh "$BUILD_DIR/$ELF_NAME"
+
+          echo ""
+          echo "ELF checksum:"
+          sha256sum "$BUILD_DIR/$ELF_NAME"
+
+          echo ""
+          echo "ELF size:"
+          arm-none-eabi-size "$BUILD_DIR/$ELF_NAME"
+
+          echo ""
+          echo "Check for Hello string:"
+          arm-none-eabi-strings "$BUILD_DIR/$ELF_NAME" | grep -n "Hello" || {
+            echo "ERROR: Hello not found inside ELF."
+            echo "Refusing to flash because UART test expects Hello!"
+            exit 1
+          }
+
+          echo ""
+          echo "ELF file type:"
+          file "$BUILD_DIR/$ELF_NAME"
 
       - name: Check ST-Link connection
         run: |
@@ -269,8 +359,41 @@ jobs:
 
       - name: Flash STM32F303K8
         run: |
+          set -eux
+
           openocd -f interface/stlink.cfg -f "$STM32_TARGET_CFG" \
-            -c "program $BUILD_DIR/$ELF_NAME verify reset exit"
+            -c "init" \
+            -c "reset halt" \
+            -c "flash erase_address 0x08000000 0x10000" \
+            -c "program $BUILD_DIR/$ELF_NAME verify" \
+            -c "reset run" \
+            -c "shutdown"
+
+      - name: Add flash summary
+        if: always()
+        run: |
+          if [ -f "$BUILD_DIR/$ELF_NAME" ]; then
+            CHECKSUM="$(sha256sum "$BUILD_DIR/$ELF_NAME" | awk '{print $1}')"
+            SIZE_OUTPUT="$(arm-none-eabi-size "$BUILD_DIR/$ELF_NAME" | tail -n 1)"
+          else
+            CHECKSUM="N/A"
+            SIZE_OUTPUT="N/A"
+          fi
+
+          {
+            echo "## STM32F303K8 flash result"
+            echo ""
+            echo "| Item | Result |"
+            echo "|---|---|"
+            echo "| Runner | $RUNNER_NAME |"
+            echo "| Firmware | $BUILD_DIR/$ELF_NAME |"
+            echo "| SHA256 | \`$CHECKSUM\` |"
+            echo "| Size | \`$SIZE_OUTPUT\` |"
+            echo "| Target config | $STM32_TARGET_CFG |"
+            echo "| Flash start | 0x08000000 |"
+            echo "| Flash erase size | 0x10000 / 64 KiB |"
+            echo "| Programmer | ST-Link / OpenOCD |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 6: Read UART output and verify "Hello!" was transmitted
@@ -290,31 +413,86 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Show available serial ports
+        run: |
+          echo "Devices:"
+          ls -l /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || true
+
+          echo ""
+          echo "USB devices:"
+          lsusb || true
+
+          echo ""
+          echo "Python serial module:"
+          python3 - <<'PYEOF'
+          import serial
+          import serial.tools.list_ports
+
+          print("pyserial version:", serial.__version__)
+          print("serial module path:", serial.__file__)
+
+          print("Available ports:")
+          for p in serial.tools.list_ports.comports():
+              print(f"  {p.device} - {p.description} - {p.hwid}")
+          PYEOF
+
       - name: Reset MCU and capture UART output
         run: |
           python3 - <<'PYEOF'
-          import serial, subprocess, time, sys
+          import os
+          import serial
+          import subprocess
+          import time
+          import sys
 
-          port = "/dev/ttyACM0"
-          baud = 115200
+          port = os.environ.get("UART_PORT", "/dev/ttyACM0")
+          baud = int(os.environ.get("UART_BAUD", "115200"))
+          target_cfg = os.environ.get("STM32_TARGET_CFG", "target/stm32f3x.cfg")
 
-          with serial.Serial(port, baud, timeout=3) as ser:
+          print(f"Opening UART port: {port}")
+          print(f"Baud rate: {baud}")
+
+          with serial.Serial(port, baud, timeout=5) as ser:
               ser.reset_input_buffer()
+              ser.reset_output_buffer()
+
+              print("Resetting STM32...")
               subprocess.run([
                   "openocd",
                   "-f", "interface/stlink.cfg",
-                  "-f", "target/stm32f3x.cfg",
+                  "-f", target_cfg,
                   "-c", "init",
                   "-c", "reset run",
                   "-c", "shutdown",
-              ], check=True, capture_output=True)
-              time.sleep(1)
-              data = ser.read(64).decode("utf-8", errors="replace")
+              ], check=True)
 
-          print(f"Received: {repr(data)}")
-          if "Hello!" not in data:
+              print("Waiting for UART output...")
+              time.sleep(2)
+
+              data = ser.read(256)
+
+          print("Raw bytes:", data)
+          print("Hex:", data.hex(" "))
+
+          text = data.decode("utf-8", errors="replace")
+          print(f"Received text: {repr(text)}")
+
+          if b"Hello!" not in data:
               print("FAIL: 'Hello!' not found in UART output")
+              print("")
+              print("Possible causes:")
+              print("  - Wrong firmware was flashed")
+              print("  - Firmware does not transmit Hello!")
+              print("  - Wrong UART peripheral or pins")
+              print("  - Wrong baud rate")
+              print("  - Message is sent only once before test starts")
+              print("")
+              print("For NUCLEO-F303K8 ST-LINK VCP, use USART2:")
+              print("  TX = PA2")
+              print("  RX = PA15")
+              print("  Baud = 115200")
               sys.exit(1)
+
           print("PASS: 'Hello!' received over debug UART")
           PYEOF
 
@@ -329,4 +507,5 @@ jobs:
             echo "| Port | $UART_PORT |"
             echo "| Baud | $UART_BAUD |"
             echo "| Expected | Hello! |"
+            echo "| Board UART | USART2 on PA2 / PA15 for NUCLEO-F303K8 ST-LINK VCP |"
           } >> "$GITHUB_STEP_SUMMARY"
