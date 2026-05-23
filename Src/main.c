@@ -92,7 +92,7 @@ int main(void)
   {
 	  if(BUTTON_GET_STATE)
 	  {
-		  // 0.25s delay
+		  // 0.25s delay sadasd
 		  LL_mDelay(250);
 		  LED_ON;
 		  // 0.25s delay
