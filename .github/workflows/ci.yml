@@ -477,12 +477,12 @@ jobs:
           text = data.decode("utf-8", errors="replace")
           print(f"Received text: {repr(text)}")
 
-          if b"Hello!" not in data:
-              print("FAIL: 'Hello!' not found in UART output")
+          if b"Hello World!" not in data:
+              print("FAIL: 'Hello World!' not found in UART output")
               print("")
               print("Possible causes:")
               print("  - Wrong firmware was flashed")
-              print("  - Firmware does not transmit Hello!")
+              print("  - Firmware does not transmit Hello World!")
               print("  - Wrong UART peripheral or pins")
               print("  - Wrong baud rate")
               print("  - Message is sent only once before test starts")
@@ -493,19 +493,19 @@ jobs:
               print("  Baud = 115200")
               sys.exit(1)
 
-          print("PASS: 'Hello!' received over debug UART")
+          print("PASS: 'Hello World!' received over debug UART")
           PYEOF
 
       - name: Add UART test summary
         if: always()
         run: |
           {
-            echo "## UART Hello! Test"
+            echo "## UART Hello World! Test"
             echo ""
             echo "| Item | Value |"
             echo "|---|---|"
             echo "| Port | $UART_PORT |"
             echo "| Baud | $UART_BAUD |"
-            echo "| Expected | Hello! |"
+            echo "| Expected | Hello World! |"
             echo "| Board UART | USART2 on PA2 / PA15 for NUCLEO-F303K8 ST-LINK VCP |"
           } >> "$GITHUB_STEP_SUMMARY"
