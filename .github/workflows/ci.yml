@@ -524,10 +524,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install GPIO tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y python3-gpiozero python3-lgpio
+      # - name: Install GPIO tools
+      #   run: |
+      #     sudo apt-get update -qq
+      #     sudo apt-get install -y python3-gpiozero python3-lgpio
 
       - name: Reset STM32
         run: |
