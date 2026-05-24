@@ -398,114 +398,245 @@ jobs:
   # ─────────────────────────────────────────────────────────────────────────────
   # JOB 6: Read UART output and verify "Hello!" was transmitted
   # ─────────────────────────────────────────────────────────────────────────────
-  uart-hello-test:
-    name: "UART Hello! Test"
+  # uart-hello-test:
+  #   name: "UART Hello! Test"
+  #   runs-on: [self-hosted, Linux, ARM64]
+  #   needs: flash-stm32
+  #   if: github.event_name == 'push'
+
+  #   env:
+  #     STM32_TARGET_CFG: target/stm32f3x.cfg
+  #     UART_PORT: /dev/ttyACM0
+  #     UART_BAUD: "115200"
+
+  #   steps:
+  #     - name: Checkout repository
+  #       uses: actions/checkout@v4
+
+  #     - name: Show available serial ports
+  #       run: |
+  #         echo "Devices:"
+  #         ls -l /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || true
+
+  #         echo ""
+  #         echo "USB devices:"
+  #         lsusb || true
+
+  #         echo ""
+  #         echo "Python serial module:"
+  #         python3 - <<'PYEOF'
+  #         import serial
+  #         import serial.tools.list_ports
+
+  #         print("pyserial version:", serial.__version__)
+  #         print("serial module path:", serial.__file__)
+
+  #         print("Available ports:")
+  #         for p in serial.tools.list_ports.comports():
+  #             print(f"  {p.device} - {p.description} - {p.hwid}")
+  #         PYEOF
+
+  #     - name: Reset MCU and capture UART output
+  #       run: |
+  #         python3 - <<'PYEOF'
+  #         import os
+  #         import serial
+  #         import subprocess
+  #         import time
+  #         import sys
+
+  #         port = os.environ.get("UART_PORT", "/dev/ttyACM0")
+  #         baud = int(os.environ.get("UART_BAUD", "115200"))
+  #         target_cfg = os.environ.get("STM32_TARGET_CFG", "target/stm32f3x.cfg")
+
+  #         print(f"Opening UART port: {port}")
+  #         print(f"Baud rate: {baud}")
+
+  #         with serial.Serial(port, baud, timeout=5) as ser:
+  #             ser.reset_input_buffer()
+  #             ser.reset_output_buffer()
+
+  #             print("Resetting STM32...")
+  #             subprocess.run([
+  #                 "openocd",
+  #                 "-f", "interface/stlink.cfg",
+  #                 "-f", target_cfg,
+  #                 "-c", "init",
+  #                 "-c", "reset run",
+  #                 "-c", "shutdown",
+  #             ], check=True)
+
+  #             print("Waiting for UART output...")
+  #             time.sleep(2)
+
+  #             data = ser.read(256)
+
+  #         print("Raw bytes:", data)
+  #         print("Hex:", data.hex(" "))
+
+  #         text = data.decode("utf-8", errors="replace")
+  #         print(f"Received text: {repr(text)}")
+
+  #         if b"Hello World!" not in data:
+  #             print("FAIL: 'Hello World!' not found in UART output")
+  #             print("")
+  #             print("Possible causes:")
+  #             print("  - Wrong firmware was flashed")
+  #             print("  - Firmware does not transmit Hello World!")
+  #             print("  - Wrong UART peripheral or pins")
+  #             print("  - Wrong baud rate")
+  #             print("  - Message is sent only once before test starts")
+  #             print("")
+  #             print("For NUCLEO-F303K8 ST-LINK VCP, use USART2:")
+  #             print("  TX = PA2")
+  #             print("  RX = PA15")
+  #             print("  Baud = 115200")
+  #             sys.exit(1)
+
+  #         print("PASS: 'Hello World!' received over debug UART")
+  #         PYEOF
+
+  #     - name: Add UART test summary
+  #       if: always()
+  #       run: |
+  #         {
+  #           echo "## UART Hello World! Test"
+  #           echo ""
+  #           echo "| Item | Value |"
+  #           echo "|---|---|"
+  #           echo "| Port | $UART_PORT |"
+  #           echo "| Baud | $UART_BAUD |"
+  #           echo "| Expected | Hello World! |"
+  #           echo "| Board UART | USART2 on PA2 / PA15 for NUCLEO-F303K8 ST-LINK VCP |"
+  #         } >> "$GITHUB_STEP_SUMMARY"
+  gpio-led-frequency-test:
+    name: "GPIO LED Frequency Test"
     runs-on: [self-hosted, Linux, ARM64]
     needs: flash-stm32
     if: github.event_name == 'push'
 
     env:
       STM32_TARGET_CFG: target/stm32f3x.cfg
-      UART_PORT: /dev/ttyACM0
-      UART_BAUD: "115200"
+      BUTTON_GPIO: "17"
+      LED_GPIO: "27"
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Show available serial ports
+      - name: Install GPIO tools
         run: |
-          echo "Devices:"
-          ls -l /dev/ttyACM* /dev/ttyUSB* 2>/dev/null || true
+          sudo apt-get update -qq
+          sudo apt-get install -y python3-gpiozero python3-lgpio
 
-          echo ""
-          echo "USB devices:"
-          lsusb || true
+      - name: Reset STM32
+        run: |
+          openocd -f interface/stlink.cfg -f "$STM32_TARGET_CFG" \
+            -c "init" \
+            -c "reset run" \
+            -c "shutdown"
 
-          echo ""
-          echo "Python serial module:"
-          python3 - <<'PYEOF'
-          import serial
-          import serial.tools.list_ports
-
-          print("pyserial version:", serial.__version__)
-          print("serial module path:", serial.__file__)
-
-          print("Available ports:")
-          for p in serial.tools.list_ports.comports():
-              print(f"  {p.device} - {p.description} - {p.hwid}")
-          PYEOF
-
-      - name: Reset MCU and capture UART output
+      - name: Test LED frequency using Raspberry Pi GPIO
         run: |
           python3 - <<'PYEOF'
           import os
-          import serial
-          import subprocess
           import time
           import sys
+          from gpiozero import LED, DigitalInputDevice
 
-          port = os.environ.get("UART_PORT", "/dev/ttyACM0")
-          baud = int(os.environ.get("UART_BAUD", "115200"))
-          target_cfg = os.environ.get("STM32_TARGET_CFG", "target/stm32f3x.cfg")
+          button_gpio = int(os.environ.get("BUTTON_GPIO", "17"))
+          led_gpio = int(os.environ.get("LED_GPIO", "27"))
 
-          print(f"Opening UART port: {port}")
-          print(f"Baud rate: {baud}")
+          # RPi GPIO17 acts like the button signal into STM PA3
+          stm_button = LED(button_gpio)
 
-          with serial.Serial(port, baud, timeout=5) as ser:
-              ser.reset_input_buffer()
-              ser.reset_output_buffer()
+          # RPi GPIO27 reads STM PA4 LED output
+          stm_led = DigitalInputDevice(led_gpio, pull_up=False)
 
-              print("Resetting STM32...")
-              subprocess.run([
-                  "openocd",
-                  "-f", "interface/stlink.cfg",
-                  "-f", target_cfg,
-                  "-c", "init",
-                  "-c", "reset run",
-                  "-c", "shutdown",
-              ], check=True)
+          def measure_frequency(duration_s=5.0):
+              """
+              Measures rising edges on STM LED output.
+              Frequency = rising_edges / measured_time.
+              """
+              start = time.monotonic()
+              end = start + duration_s
 
-              print("Waiting for UART output...")
-              time.sleep(2)
+              last_state = stm_led.value
+              rising_edges = 0
+              edge_times = []
 
-              data = ser.read(256)
+              while time.monotonic() < end:
+                  state = stm_led.value
 
-          print("Raw bytes:", data)
-          print("Hex:", data.hex(" "))
+                  if state == 1 and last_state == 0:
+                      rising_edges += 1
+                      edge_times.append(time.monotonic())
 
-          text = data.decode("utf-8", errors="replace")
-          print(f"Received text: {repr(text)}")
+                  last_state = state
+                  time.sleep(0.002)
 
-          if b"Hello World!" not in data:
-              print("FAIL: 'Hello World!' not found in UART output")
+              elapsed = time.monotonic() - start
+
+              if len(edge_times) >= 2:
+                  periods = [
+                      edge_times[i] - edge_times[i - 1]
+                      for i in range(1, len(edge_times))
+                  ]
+                  avg_period = sum(periods) / len(periods)
+                  freq = 1.0 / avg_period
+              else:
+                  freq = rising_edges / elapsed
+
+              return freq, rising_edges, edge_times
+
+          def assert_frequency(name, measured, expected, tolerance):
+              low = expected - tolerance
+              high = expected + tolerance
+
+              print(f"{name}: measured {measured:.2f} Hz, expected around {expected:.2f} Hz")
+
+              if not (low <= measured <= high):
+                  print(f"FAIL: {name} frequency outside range {low:.2f} Hz - {high:.2f} Hz")
+                  sys.exit(1)
+
+              print(f"PASS: {name} frequency OK")
+
+          try:
+              print("Testing SLOW mode: button not pressed")
+              stm_button.off()
+
+              # Wait for firmware loop to settle
+              time.sleep(2.5)
+
+              slow_freq, slow_edges, _ = measure_frequency(duration_s=6.0)
+              print(f"SLOW rising edges: {slow_edges}")
+
+              # Your slow blink is 1s ON + 1s OFF = 0.5 Hz
+              assert_frequency("SLOW mode", slow_freq, expected=0.5, tolerance=0.25)
+
               print("")
-              print("Possible causes:")
-              print("  - Wrong firmware was flashed")
-              print("  - Firmware does not transmit Hello World!")
-              print("  - Wrong UART peripheral or pins")
-              print("  - Wrong baud rate")
-              print("  - Message is sent only once before test starts")
-              print("")
-              print("For NUCLEO-F303K8 ST-LINK VCP, use USART2:")
-              print("  TX = PA2")
-              print("  RX = PA15")
-              print("  Baud = 115200")
-              sys.exit(1)
+              print("Testing FAST mode: button pressed")
+              stm_button.on()
 
-          print("PASS: 'Hello World!' received over debug UART")
+              # Wait for firmware loop to notice button
+              time.sleep(2.5)
+
+              fast_freq, fast_edges, _ = measure_frequency(duration_s=4.0)
+              print(f"FAST rising edges: {fast_edges}")
+
+              # Your fast blink is 0.25s ON + 0.25s OFF = 2 Hz
+              assert_frequency("FAST mode", fast_freq, expected=2.0, tolerance=0.5)
+
+              print("")
+              print("Checking that frequency changed")
+              if fast_freq <= slow_freq * 2.0:
+                  print(f"FAIL: fast frequency {fast_freq:.2f} Hz is not clearly faster than slow {slow_freq:.2f} Hz")
+                  sys.exit(1)
+
+              print("PASS: LED frequency changes when Raspberry Pi drives button GPIO")
+
+          finally:
+              stm_button.off()
+              stm_button.close()
+              stm_led.close()
           PYEOF
-
-      - name: Add UART test summary
-        if: always()
-        run: |
-          {
-            echo "## UART Hello World! Test"
-            echo ""
-            echo "| Item | Value |"
-            echo "|---|---|"
-            echo "| Port | $UART_PORT |"
-            echo "| Baud | $UART_BAUD |"
-            echo "| Expected | Hello World! |"
-            echo "| Board UART | USART2 on PA2 / PA15 for NUCLEO-F303K8 ST-LINK VCP |"
-          } >> "$GITHUB_STEP_SUMMARY"
