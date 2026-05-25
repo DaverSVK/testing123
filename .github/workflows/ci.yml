@@ -509,6 +509,9 @@ jobs:
   #           echo "| Expected | Hello World! |"
   #           echo "| Board UART | USART2 on PA2 / PA15 for NUCLEO-F303K8 ST-LINK VCP |"
   #         } >> "$GITHUB_STEP_SUMMARY"
+
+  
+
   gpio-led-frequency-test:
     name: "GPIO LED Frequency Test"
     runs-on: [self-hosted, Linux, ARM64]
@@ -528,7 +531,24 @@ jobs:
       #   run: |
       #     sudo apt-get update -qq
       #     sudo apt-get install -y python3-gpiozero python3-lgpio
+      - name: Debug runner GPIO access
+        run: |
+          whoami
+          id
+          groups
+          ls -l /dev/gpiochip*
+          ls -l /dev/gpiomem*
+          python3 - <<'PYEOF'
+          import os
+          print("UID:", os.getuid())
+          print("GID:", os.getgid())
+          print("Groups:", os.getgroups())
 
+          import lgpio
+          chip = lgpio.gpiochip_open(0)
+          print("Opened gpiochip0 OK")
+          lgpio.gpiochip_close(chip)
+          PYEOF
       - name: Reset STM32
         run: |
           openocd -f interface/stlink.cfg -f "$STM32_TARGET_CFG" \
