@@ -2,9 +2,9 @@ name: Assignment 1 - GPIO PA3/PA4 Tests
 
 on:
   push:
-    branches: [ zadanie_cv1, main, master ]
+    branches: [ zadanie_cv2, main, master ]
   pull_request:
-    branches: [ zadanie_cv1, main, master ]
+    branches: [ zadanie_cv2, main, master ]
 
 env:
   BUILD_DIR: build
@@ -30,7 +30,7 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv1 tests
+        run: mv _tests-private/cv2 tests
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -77,7 +77,7 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv1 tests
+        run: mv _tests-private/cv2 tests
 
       - name: Install ARM binutils and pytest
         run: |
