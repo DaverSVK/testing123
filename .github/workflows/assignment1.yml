@@ -2,9 +2,9 @@ name: Assignment 1 - GPIO PA3/PA4 Tests
 
 on:
   push:
-    branches: [ zadanie_cv2, main, master ]
+    branches: [ zadanie_cv1, zadanie_cv2, main, master ]
   pull_request:
-    branches: [ zadanie_cv2, main, master ]
+    branches: [ zadanie_cv1, zadanie_cv2, main, master ]
 
 env:
   BUILD_DIR: build
