@@ -27,6 +27,7 @@ jobs:
         with:
           repository: DaverSVK/vrs-tests
           token: ${{ secrets.TESTS_REPO_TOKEN }}
+          ref: main
           sparse-checkout: cv1
           sparse-checkout-cone-mode: true
           path: _tests-private
@@ -76,6 +77,7 @@ jobs:
         with:
           repository: DaverSVK/vrs-tests
           token: ${{ secrets.TESTS_REPO_TOKEN }}
+          ref: main
           sparse-checkout: cv1
           sparse-checkout-cone-mode: true
           path: _tests-private
@@ -303,6 +305,7 @@ jobs:
           with:
             repository: DaverSVK/vrs-tests
             token: ${{ secrets.TESTS_REPO_TOKEN }}
+            ref: main
             sparse-checkout: cv1
             sparse-checkout-cone-mode: true
             path: _tests-private
