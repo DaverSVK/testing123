@@ -83,12 +83,7 @@ jobs:
             --no-header \
             -p no:cacheprovider \
             2>&1 | tee binary-test-results.txt
-
-      - name: Print grading statistics
-        if: always()
-        run: |
-          python3 tests/grade_assignment.py 2>&1 | tee grading-statistics.txt
-          cat grading-statistics.txt >> "$GITHUB_STEP_SUMMARY"
+            exit ${PIPESTATUS[0]}
 
       - name: Upload binary test results
         if: always()
@@ -99,6 +94,7 @@ jobs:
             binary-test-results.txt
             disassembly.txt
             symbols.txt
+            build/vrs_cv2_ll_programming.elf
           retention-days: 30
 
   build:
@@ -154,14 +150,34 @@ jobs:
           path: ${{ env.BUILD_DIR }}
 
       - name: Flash STM32
+        id: flash
+        continue-on-error: true
         run: |
+          set +e
+
           openocd -f interface/stlink.cfg -f "$STM32_TARGET_CFG" \
             -c "init" \
             -c "reset halt" \
             -c "program $BUILD_DIR/$ELF_NAME verify reset exit"
 
+          FLASH_STATUS=$?
+
+          if [ "$FLASH_STATUS" -eq 0 ]; then
+            echo "flash_status=PASS" >> "$GITHUB_OUTPUT"
+          else
+            echo "flash_status=FAIL" >> "$GITHUB_OUTPUT"
+            echo "FAIL" > hardware-result.txt
+          fi
+
+          exit 0
+
       - name: Test LED behavior from PA3 input
+        id: hardware_test
+        if: steps.flash.outputs.flash_status == 'PASS'
+        continue-on-error: true
         run: |
+          set +e
+
           python3 - <<'PYEOF'
           import os
           import time
@@ -210,9 +226,79 @@ jobs:
                   sys.exit(1)
 
               print("PASS: PA3 changes PA4 blinking behavior")
+              sys.exit(0)
 
           finally:
               button.off()
               button.close()
               led.close()
           PYEOF
+
+          TEST_STATUS=$?
+
+          if [ "$TEST_STATUS" -eq 0 ]; then
+            echo "PASS" > hardware-result.txt
+          else
+            echo "FAIL" > hardware-result.txt
+          fi
+
+          exit 0
+
+      - name: Ensure hardware result exists
+        if: always()
+        run: |
+          if [ ! -f hardware-result.txt ]; then
+            echo "FAIL" > hardware-result.txt
+          fi
+
+          echo "Hardware result:"
+          cat hardware-result.txt
+
+      - name: Upload hardware result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware-result
+          path: hardware-result.txt
+          retention-days: 30
+
+  grading:
+      name: Final grading statistics
+      runs-on: ubuntu-latest
+      needs:
+        - binary-tests
+        - hardware-gpio-test
+      if: always()
+
+      steps:
+        - name: Checkout repository
+          uses: actions/checkout@v4
+
+        - name: Install pytest
+          run: pip install pytest
+
+        - name: Download binary test results
+          uses: actions/download-artifact@v4
+          with:
+            name: binary-test-results
+            path: .
+
+        - name: Download hardware result
+          uses: actions/download-artifact@v4
+          with:
+            name: hardware-result
+            path: .
+          continue-on-error: true
+
+        - name: Print grading statistics
+          run: |
+            python3 tests/grade_assignment.py 2>&1 | tee grading-statistics.txt
+            cat grading-statistics.txt >> "$GITHUB_STEP_SUMMARY"
+
+        - name: Upload grading statistics
+          if: always()
+          uses: actions/upload-artifact@v4
+          with:
+            name: grading-statistics
+            path: grading-statistics.txt
+            retention-days: 30
