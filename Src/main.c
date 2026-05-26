@@ -33,7 +33,7 @@ int main(void)
   LL_Init1msTick(8000000);
   LL_SYSTICK_SetClkSource(LL_SYSTICK_CLKSOURCE_HCLK);
   LL_SetSystemCoreClock(8000000);	
-
+ //added
   /*
    * TASK - configure MCU peripherals so that button state can be read and LED will blink.
    * Button must be connected to the GPIO port A and its pin 3.
