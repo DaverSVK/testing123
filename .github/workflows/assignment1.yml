@@ -83,7 +83,12 @@ jobs:
             --no-header \
             -p no:cacheprovider \
             2>&1 | tee binary-test-results.txt
-          exit ${PIPESTATUS[0]}
+
+      - name: Print grading statistics
+        if: always()
+        run: |
+          python3 tests/grade_assignment.py 2>&1 | tee grading-statistics.txt
+          cat grading-statistics.txt >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload binary test results
         if: always()
