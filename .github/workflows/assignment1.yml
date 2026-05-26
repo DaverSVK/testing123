@@ -22,6 +22,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Checkout tests (private)
+        uses: actions/checkout@v4
+        with:
+          repository: DaverSVK/vrs-tests
+          token: ${{ secrets.TESTS_REPO_TOKEN }}
+          sparse-checkout: cv1
+          sparse-checkout-cone-mode: true
+          path: _tests-private
+
+      - name: Place tests
+        run: mv _tests-private/cv1 tests
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -58,6 +70,18 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Checkout tests (private)
+        uses: actions/checkout@v4
+        with:
+          repository: DaverSVK/vrs-tests
+          token: ${{ secrets.TESTS_REPO_TOKEN }}
+          sparse-checkout: cv1
+          sparse-checkout-cone-mode: true
+          path: _tests-private
+
+      - name: Place tests
+        run: mv _tests-private/cv1 tests
 
       - name: Install ARM binutils and pytest
         run: |
@@ -273,6 +297,18 @@ jobs:
       steps:
         - name: Checkout repository
           uses: actions/checkout@v4
+
+        - name: Checkout tests (private)
+          uses: actions/checkout@v4
+          with:
+            repository: DaverSVK/vrs-tests
+            token: ${{ secrets.TESTS_REPO_TOKEN }}
+            sparse-checkout: cv1
+            sparse-checkout-cone-mode: true
+            path: _tests-private
+
+        - name: Place tests
+          run: mv _tests-private/cv1 tests
 
         - name: Install pytest
           run: pip install pytest
