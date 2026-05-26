@@ -37,7 +37,7 @@ GRADE_GROUPS = [
         0.25,
         [
             "tests/test_assignment.py::test_main_c_uses_macros_not_raw_literals",
-            "tests/test_main_c_does_not_write_whole_register",
+            "tests/test_assignment.py::test_main_c_does_not_write_whole_register",
             "tests/test_binary.py::test_main_function_present",
             "tests/test_binary.py::test_ll_mdelay_present",
             "tests/test_binary.py::test_delay_250ms_in_binary",
