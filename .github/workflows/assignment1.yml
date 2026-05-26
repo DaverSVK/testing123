@@ -1,0 +1,148 @@
+name: Assignment 1 - GPIO PA3/PA4 Tests
+
+on:
+  push:
+    branches: [ zadanie_cv1, main, master ]
+  pull_request:
+    branches: [ zadanie_cv1, main, master ]
+
+env:
+  BUILD_DIR: build
+  ELF_NAME: vrs_cv2_ll_programming.elf
+
+jobs:
+  static-tests:
+    name: Static assignment tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pytest
+        run: python3 -m pip install pytest
+
+      - name: Run static tests
+        run: |
+          python3 -m pytest tests/test_assignment_static.py -v --tb=short
+
+  build:
+    name: Build STM32 firmware
+    runs-on: ubuntu-latest
+    needs: static-tests
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ARM GCC toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi make
+
+      - name: Build firmware
+        run: |
+          make -f Makefile.ci clean || true
+          make -f Makefile.ci all
+
+      - name: Check ELF exists
+        run: |
+          test -f "$BUILD_DIR/$ELF_NAME"
+          arm-none-eabi-size "$BUILD_DIR/$ELF_NAME"
+          file "$BUILD_DIR/$ELF_NAME"
+
+      - name: Upload ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-elf
+          path: ${{ env.BUILD_DIR }}/${{ env.ELF_NAME }}
+
+  hardware-gpio-test:
+    name: Raspberry Pi hardware GPIO test
+    runs-on: [self-hosted, Linux, ARM64]
+    needs: build
+    if: github.event_name == 'push'
+
+    env:
+      STM32_TARGET_CFG: target/stm32f3x.cfg
+      BUTTON_GPIO: "17"
+      LED_GPIO: "27"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download ELF
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-elf
+          path: ${{ env.BUILD_DIR }}
+
+      - name: Flash STM32
+        run: |
+          openocd -f interface/stlink.cfg -f "$STM32_TARGET_CFG" \
+            -c "init" \
+            -c "reset halt" \
+            -c "program $BUILD_DIR/$ELF_NAME verify reset exit"
+
+      - name: Test LED behavior from PA3 input
+        run: |
+          python3 - <<'PYEOF'
+          import os
+          import time
+          import sys
+          from gpiozero import LED, DigitalInputDevice
+
+          button_gpio = int(os.environ["BUTTON_GPIO"])
+          led_gpio = int(os.environ["LED_GPIO"])
+
+          button = LED(button_gpio)
+          led = DigitalInputDevice(led_gpio, pull_up=False)
+
+          def count_edges(seconds):
+              start = time.monotonic()
+              last = led.value
+              rising = 0
+
+              while time.monotonic() - start < seconds:
+                  now = led.value
+                  if last == 0 and now == 1:
+                      rising += 1
+                  last = now
+                  time.sleep(0.002)
+
+              return rising
+
+          try:
+              print("Testing PA3 LOW / button not pressed")
+              button.off()
+              time.sleep(2.0)
+              slow_edges = count_edges(6.0)
+              print("Slow mode rising edges:", slow_edges)
+
+              print("Testing PA3 HIGH / button pressed")
+              button.on()
+              time.sleep(2.0)
+              fast_edges = count_edges(4.0)
+              print("Fast mode rising edges:", fast_edges)
+
+              if slow_edges < 1:
+                  print("FAIL: LED on PA4 does not blink in slow mode")
+                  sys.exit(1)
+
+              if fast_edges <= slow_edges:
+                  print("FAIL: LED blink did not become faster when PA3 was driven HIGH")
+                  sys.exit(1)
+
+              print("PASS: PA3 changes PA4 blinking behavior")
+
+          finally:
+              button.off()
+              button.close()
+              led.close()
+          PYEOF
