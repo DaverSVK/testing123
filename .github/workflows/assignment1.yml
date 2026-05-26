@@ -11,8 +11,11 @@ env:
   ELF_NAME: vrs_cv2_ll_programming.elf
 
 jobs:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 2: Static analysis
+  # ─────────────────────────────────────────────────────────────────────────────
   static-tests:
-    name: Static assignment tests
+    name: "Static Analysis Tests"
     runs-on: ubuntu-latest
 
     steps:
@@ -25,11 +28,73 @@ jobs:
           python-version: "3.11"
 
       - name: Install pytest
-        run: python3 -m pip install pytest
+        run: pip install pytest
 
-      - name: Run static tests
+      - name: Run static analysis tests
         run: |
-          python3 -m pytest tests/test_assignment_static.py -v --tb=short
+          python3 -m pytest tests/test_assignment.py -v \
+            --tb=short \
+            --no-header \
+            -p no:cacheprovider \
+            2>&1 | tee static-test-results.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload static test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: static-test-results
+          path: static-test-results.txt
+          retention-days: 30
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 3: Binary analysis
+  # ─────────────────────────────────────────────────────────────────────────────
+  binary-tests:
+    name: "Binary Analysis Tests"
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ARM binutils and pytest
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y binutils-arm-none-eabi
+          pip install pytest
+
+      - name: Download ELF artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-elf
+          path: ${{ env.BUILD_DIR }}
+
+      - name: Disassemble ELF
+        run: |
+          arm-none-eabi-objdump -d "$BUILD_DIR/$ELF_NAME" > disassembly.txt
+          arm-none-eabi-nm --numeric-sort "$BUILD_DIR/$ELF_NAME" > symbols.txt
+
+      - name: Run binary analysis tests
+        run: |
+          python3 -m pytest tests/test_binary.py -v \
+            --tb=short \
+            --no-header \
+            -p no:cacheprovider \
+            2>&1 | tee binary-test-results.txt
+          exit ${PIPESTATUS[0]}
+
+      - name: Upload binary test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-test-results
+          path: |
+            binary-test-results.txt
+            disassembly.txt
+            symbols.txt
+          retention-days: 30
 
   build:
     name: Build STM32 firmware
