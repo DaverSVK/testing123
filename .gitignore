@@ -1,0 +1,12 @@
+build/
+*.o
+*.lst
+*.map
+*.elf
+*.bin
+*.hex
+disassembly.txt
+symbols.txt
+
+# Tests are injected by CI — not stored in student repo
+tests/

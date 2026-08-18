@@ -33,7 +33,7 @@ int main(void)
   LL_Init1msTick(8000000);
   LL_SYSTICK_SetClkSource(LL_SYSTICK_CLKSOURCE_HCLK);
   LL_SetSystemCoreClock(8000000);	
- //added
+
   /*
    * TASK - configure MCU peripherals so that button state can be read and LED will blink.
    * Button must be connected to the GPIO port A and its pin 3.
@@ -48,11 +48,29 @@ int main(void)
   /* Enable clock for GPIO port A*/
 
 	//type your code for GPIOA clock enable here:
+	/* RCC_AHBENR bit 17 (IOPAEN) - enable clock for GPIOA peripheral */
+	*RCC_AHBENR_REG |= (1UL << 17);
 
 
   /* GPIOA pin 3 and 4 setup */
 
 	//type your code for GPIOA pins setup here:
+
+	/* PA3 - button input: MODER bits [7:6] = 00 (input mode) */
+	*GPIOA_MODER_REG &= ~(0x3UL << 6);
+	/* PA3 - pull-up resistor: PUPDR bits [7:6] = 01 */
+	*GPIOA_PUPDR_REG &= ~(0x3UL << 6);
+	*GPIOA_PUPDR_REG |=  (0x1UL << 6);
+
+	/* PA4 - LED output: MODER bits [9:8] = 01 (general purpose output) */
+	*GPIOA_MODER_REG &= ~(0x3UL << 8);
+	*GPIOA_MODER_REG |=  (0x1UL << 8);
+	/* PA4 - push-pull output: OTYPER bit 4 = 0 */
+	*GPIOA_OTYPER_REG &= ~(1UL << 4);
+	/* PA4 - low speed: OSPEEDR bits [9:8] = 00 */
+	*GPIOA_OSPEEDER_REG &= ~(0x3UL << 8);
+	/* PA4 - no pull-up/pull-down: PUPDR bits [9:8] = 00 */
+	*GPIOA_PUPDR_REG &= ~(0x3UL << 8);
 
 
   while (1)
