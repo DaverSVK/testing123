@@ -103,7 +103,7 @@ jobs:
             --no-header \
             -p no:cacheprovider \
             2>&1 | tee binary-test-results.txt
-            exit ${PIPESTATUS[0]}
+          exit ${PIPESTATUS[0]}
 
       - name: Upload binary test results
         if: always()
