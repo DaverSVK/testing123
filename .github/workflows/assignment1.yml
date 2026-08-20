@@ -1,4 +1,4 @@
-name: Assignment 1 - GPIO PA3/PA4 Tests
+name: Assignment 2 - Edge detection and debounce
 
 on:
   push:
@@ -30,7 +30,7 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv1 tests
+        run: mv _tests-private/cv2 tests
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -77,7 +77,7 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv1 tests
+        run: mv _tests-private/cv2 tests
 
       - name: Install ARM binutils and pytest
         run: |
@@ -103,7 +103,7 @@ jobs:
             --no-header \
             -p no:cacheprovider \
             2>&1 | tee binary-test-results.txt
-            exit ${PIPESTATUS[0]}
+          exit ${PIPESTATUS[0]}
 
       - name: Upload binary test results
         if: always()
@@ -163,6 +163,16 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Checkout tests (private)
+        uses: actions/checkout@v4
+        with:
+          repository: DaverSVK/vrs-tests
+          token: ${{ secrets.TESTS_REPO_TOKEN }}
+          path: _tests-private
+
+      - name: Place tests
+        run: mv _tests-private/cv2 tests
+
       - name: Download ELF
         uses: actions/download-artifact@v4
         with:
@@ -191,69 +201,14 @@ jobs:
 
           exit 0
 
-      - name: Test LED behavior from PA3 input
+      - name: Test edge detection and debounce on PA3/PA4
         id: hardware_test
         if: steps.flash.outputs.flash_status == 'PASS'
         continue-on-error: true
         run: |
           set +e
 
-          python3 - <<'PYEOF'
-          import os
-          import time
-          import sys
-          from gpiozero import LED, DigitalInputDevice
-
-          button_gpio = int(os.environ["BUTTON_GPIO"])
-          led_gpio = int(os.environ["LED_GPIO"])
-
-          button = LED(button_gpio)
-          led = DigitalInputDevice(led_gpio, pull_up=False)
-
-          def count_edges(seconds):
-              start = time.monotonic()
-              last = led.value
-              rising = 0
-
-              while time.monotonic() - start < seconds:
-                  now = led.value
-                  if last == 0 and now == 1:
-                      rising += 1
-                  last = now
-                  time.sleep(0.002)
-
-              return rising
-
-          try:
-              print("Testing PA3 LOW / button not pressed")
-              button.off()
-              time.sleep(2.0)
-              slow_edges = count_edges(6.0)
-              print("Slow mode rising edges:", slow_edges)
-
-              print("Testing PA3 HIGH / button pressed")
-              button.on()
-              time.sleep(2.0)
-              fast_edges = count_edges(4.0)
-              print("Fast mode rising edges:", fast_edges)
-
-              if slow_edges < 1:
-                  print("FAIL: LED on PA4 does not blink in slow mode")
-                  sys.exit(1)
-
-              if fast_edges <= slow_edges:
-                  print("FAIL: LED blink did not become faster when PA3 was driven HIGH")
-                  sys.exit(1)
-
-              print("PASS: PA3 changes PA4 blinking behavior")
-              sys.exit(0)
-
-          finally:
-              button.off()
-              button.close()
-              led.close()
-          PYEOF
-
+          python3 tests/hw_debounce_test.py
           TEST_STATUS=$?
 
           if [ "$TEST_STATUS" -eq 0 ]; then
@@ -279,7 +234,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: hardware-result
-          path: hardware-result.txt
+          path: |
+            hardware-result.txt
+            hardware-results.json
           retention-days: 30
 
   grading:
@@ -300,12 +257,12 @@ jobs:
             repository: DaverSVK/vrs-tests
             token: ${{ secrets.TESTS_REPO_TOKEN }}
             ref: main
-            sparse-checkout: cv1
+            sparse-checkout: cv2
             sparse-checkout-cone-mode: true
             path: _tests-private
 
         - name: Place tests
-          run: mv _tests-private/cv1 tests
+          run: mv _tests-private/cv2 tests
 
         - name: Install pytest
           run: pip install pytest

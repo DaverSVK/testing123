@@ -7,6 +7,8 @@ build/
 *.hex
 disassembly.txt
 symbols.txt
+hardware-result.txt
+hardware-results.json
 
 # Tests are injected by CI — not stored in student repo
 tests/
