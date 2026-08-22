@@ -205,12 +205,30 @@ jobs:
         run: |
           set +e
 
-          openocd -f interface/stlink.cfg -f "$STM32_TARGET_CFG" \
-            -c "init" \
-            -c "reset halt" \
-            -c "program $BUILD_DIR/$ELF_NAME verify reset exit"
+          # STM32F303K8 has only 12 KiB of SRAM (0x20000000..0x20002FFF), but
+          # target/stm32f3x.cfg defaults WORKAREASIZE to 0x4000 (16 KiB). The flash
+          # loader buffer then runs off the end of SRAM and programming dies with
+          # "Failed to write memory at 0x20003008". Must be set before the target cfg.
+          flash_board() {
+            OOCD=(openocd -f interface/stlink.cfg)
+            OOCD+=(-c "set WORKAREASIZE 0x3000")
+            OOCD+=(-f "$STM32_TARGET_CFG")
+            OOCD+=("$@")
+            OOCD+=(-c "init" -c "reset halt")
+            OOCD+=(-c "program $BUILD_DIR/$ELF_NAME verify reset exit")
+            "${OOCD[@]}"
+          }
 
+          flash_board
           FLASH_STATUS=$?
+
+          # A student's firmware can lock the core out of the debug port (bad clock
+          # setup, WFI with the debug clock gated). Connecting under reset recovers it.
+          if [ "$FLASH_STATUS" -ne 0 ]; then
+            echo "First attempt failed - retrying with connect under reset"
+            flash_board -c "reset_config srst_only srst_nogate connect_assert_srst"
+            FLASH_STATUS=$?
+          fi
 
           if [ "$FLASH_STATUS" -eq 0 ]; then
             echo "flash_status=PASS" >> "$GITHUB_OUTPUT"
