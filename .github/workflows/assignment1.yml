@@ -1,18 +1,18 @@
-name: Assignment 3 - EXTI interrupt and debounce
+name: Assignment 4 - USART + DMA
 
 on:
   push:
-    branches: [ zadanie_cv1, zadanie_cv2, zadanie_cv3, main, master ]
+    branches: [ zadanie_cv1, zadanie_cv2, zadanie_cv3, zadanie_cv4, main, master ]
   pull_request:
-    branches: [ zadanie_cv1, zadanie_cv2, zadanie_cv3, main, master ]
+    branches: [ zadanie_cv1, zadanie_cv2, zadanie_cv3, zadanie_cv4, main, master ]
 
 env:
   BUILD_DIR: build
-  ELF_NAME: vrs_cv2_ll_programming.elf
+  ELF_NAME: usart_DMA.elf
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
-  # JOB 2: Static analysis
+  # JOB 1: Static analysis
   # ─────────────────────────────────────────────────────────────────────────────
   static-tests:
     name: "Static Analysis Tests"
@@ -30,7 +30,7 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv3 tests
+        run: mv _tests-private/cv4 tests
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -58,6 +58,42 @@ jobs:
           retention-days: 30
 
   # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 2: Build
+  # ─────────────────────────────────────────────────────────────────────────────
+  build:
+    name: Build STM32 firmware
+    runs-on: ubuntu-latest
+    # Deliberately NOT "needs: static-tests". A failing static check must not skip the
+    # build, the binary analysis and the hardware test - every group is graded on its
+    # own, so a partially finished assignment still has to reach the Raspberry Pi.
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ARM GCC toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi make
+
+      - name: Build firmware
+        run: |
+          make -f Makefile.ci clean || true
+          make -f Makefile.ci all
+
+      - name: Check ELF exists
+        run: |
+          test -f "$BUILD_DIR/$ELF_NAME"
+          arm-none-eabi-size "$BUILD_DIR/$ELF_NAME"
+          file "$BUILD_DIR/$ELF_NAME"
+
+      - name: Upload ELF
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-elf
+          path: ${{ env.BUILD_DIR }}/${{ env.ELF_NAME }}
+
+  # ─────────────────────────────────────────────────────────────────────────────
   # JOB 3: Binary analysis
   # ─────────────────────────────────────────────────────────────────────────────
   binary-tests:
@@ -77,7 +113,7 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv3 tests
+        run: mv _tests-private/cv4 tests
 
       - name: Install ARM binutils and pytest
         run: |
@@ -116,50 +152,22 @@ jobs:
             disassembly.txt
             symbols.txt
             vectors.txt
-            build/vrs_cv2_ll_programming.elf
+            build/usart_DMA.elf
           retention-days: 30
 
-  build:
-    name: Build STM32 firmware
-    runs-on: ubuntu-latest
-    needs: static-tests
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install ARM GCC toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-none-eabi binutils-arm-none-eabi make
-
-      - name: Build firmware
-        run: |
-          make -f Makefile.ci clean || true
-          make -f Makefile.ci all
-
-      - name: Check ELF exists
-        run: |
-          test -f "$BUILD_DIR/$ELF_NAME"
-          arm-none-eabi-size "$BUILD_DIR/$ELF_NAME"
-          file "$BUILD_DIR/$ELF_NAME"
-
-      - name: Upload ELF
-        uses: actions/upload-artifact@v4
-        with:
-          name: firmware-elf
-          path: ${{ env.BUILD_DIR }}/${{ env.ELF_NAME }}
-
-  hardware-gpio-test:
-    name: Raspberry Pi hardware GPIO test
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 4: Hardware test on the Raspberry Pi (USART over the ST-LINK VCP)
+  # ─────────────────────────────────────────────────────────────────────────────
+  hardware-usart-test:
+    name: Raspberry Pi hardware USART test
     runs-on: [self-hosted, Linux, ARM64]
     needs: build
     if: github.event_name == 'push'
 
     env:
       STM32_TARGET_CFG: target/stm32f3x.cfg
-      BUTTON_GPIO: "17"
-      LED_GPIO: "27"
+      # Leave empty to auto-discover the ST-LINK virtual COM port (/dev/ttyACM*).
+      SERIAL_PORT: ""
 
     steps:
       - name: Checkout repository
@@ -173,13 +181,23 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv3 tests
+        run: mv _tests-private/cv4 tests
 
       - name: Download ELF
         uses: actions/download-artifact@v4
         with:
           name: firmware-elf
           path: ${{ env.BUILD_DIR }}
+
+      - name: Ensure pyserial is available
+        run: |
+          if python3 -c "import serial" 2>/dev/null; then
+            echo "pyserial is already installed"
+          else
+            python3 -m pip install --user --quiet pyserial \
+              || python3 -m pip install --user --quiet --break-system-packages pyserial \
+              || sudo apt-get install -y python3-serial
+          fi
 
       - name: Flash STM32
         id: flash
@@ -203,14 +221,19 @@ jobs:
 
           exit 0
 
-      - name: Test the EXTI interrupt and the debounce on PA3/PA4
+      - name: Test USART2 + DMA over the virtual COM port
         id: hardware_test
         if: steps.flash.outputs.flash_status == 'PASS'
         continue-on-error: true
         run: |
           set +e
 
-          python3 tests/hw_interrupt_test.py
+          # openocd has just released the ST-LINK - give the CDC interface a moment
+          # to re-enumerate and the firmware a moment to boot.
+          sleep 3
+          ls -l /dev/ttyACM* /dev/serial/by-id/* 2>/dev/null || true
+
+          python3 tests/hw_usart_test.py
           TEST_STATUS=$?
 
           if [ "$TEST_STATUS" -eq 0 ]; then
@@ -241,12 +264,15 @@ jobs:
             hardware-results.json
           retention-days: 30
 
+  # ─────────────────────────────────────────────────────────────────────────────
+  # JOB 5: Grading
+  # ─────────────────────────────────────────────────────────────────────────────
   grading:
       name: Final grading statistics
       runs-on: ubuntu-latest
       needs:
         - binary-tests
-        - hardware-gpio-test
+        - hardware-usart-test
       if: always()
 
       steps:
@@ -259,12 +285,12 @@ jobs:
             repository: DaverSVK/vrs-tests
             token: ${{ secrets.TESTS_REPO_TOKEN }}
             ref: main
-            sparse-checkout: cv3
+            sparse-checkout: cv4
             sparse-checkout-cone-mode: true
             path: _tests-private
 
         - name: Place tests
-          run: mv _tests-private/cv3 tests
+          run: mv _tests-private/cv4 tests
 
         - name: Install pytest
           run: pip install pytest

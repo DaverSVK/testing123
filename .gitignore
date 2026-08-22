@@ -15,3 +15,6 @@ __pycache__/
 
 # Tests are injected by CI — not stored in student repo
 tests/
+# Instructor-side working copies of the answer key (cv1/, cv2/, cv3/, cv4/ …)
+cv[0-9]/
+old_tests/

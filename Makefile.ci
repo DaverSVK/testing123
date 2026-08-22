@@ -1,10 +1,10 @@
 # =============================================================================
-# Makefile.ci  –  standalone CI build for vrs_cvicenie_1 (STM32F303K8Tx)
+# Makefile.ci  –  standalone CI build for vrs_cvicenie_4 (STM32F303K8Tx)
 # Usage:  make -f Makefile.ci [all | clean]
 # Requires: arm-none-eabi-gcc, arm-none-eabi-size (binutils-arm-none-eabi)
 # =============================================================================
 
-TARGET   := vrs_cv2_ll_programming
+TARGET   := usart_DMA
 BUILD    := build
 
 # ── Toolchain ─────────────────────────────────────────────────────────────────
@@ -48,17 +48,24 @@ ASFLAGS := $(MCU) -g3 -IStartup
 # ── Linker flags ──────────────────────────────────────────────────────────────
 LDSCRIPT := STM32F303K8TX_FLASH.ld
 
+# -u _printf_float pulls the floating point formatter into the newlib-nano
+# printf/sprintf. The assignment prints the buffer load with "%f", which would
+# silently produce nothing without it.
 LDFLAGS := $(MCU) \
   -T$(LDSCRIPT)          \
   -Wl,--gc-sections      \
   -Wl,-Map=$(BUILD)/$(TARGET).map,--cref \
   --specs=nano.specs     \
   --specs=nosys.specs    \
+  -u _printf_float       \
   -lm
 
 # ── Source files ──────────────────────────────────────────────────────────────
 C_SOURCES := \
   Src/main.c                                                  \
+  Src/usart.c                                                 \
+  Src/dma.c                                                   \
+  Src/gpio.c                                                  \
   Src/stm32f3xx_it.c                                          \
   Src/syscalls.c                                              \
   Src/sysmem.c                                                \
@@ -66,6 +73,8 @@ C_SOURCES := \
   Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_utils.c      \
   Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_rcc.c        \
   Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_gpio.c       \
+  Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_dma.c        \
+  Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_usart.c      \
   Drivers/STM32F3xx_HAL_Driver/Src/stm32f3xx_ll_exti.c
 
 ASM_SOURCES := \
