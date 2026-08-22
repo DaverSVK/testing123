@@ -21,6 +21,7 @@
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
 #include "stm32f3xx_it.h"
+#include "assignment.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 /* USER CODE END Includes */
@@ -42,6 +43,15 @@
 
 /* Private variables ---------------------------------------------------------*/
 /* USER CODE BEGIN PV */
+
+/*
+ * Number of SysTick ticks during which the button pin is still sampled.
+ * Loaded by the EXTI interrupt when an edge appears, counted down by the SysTick
+ * interrupt. Zero means "no edge is waiting for confirmation" - then nothing is read
+ * from the pin at all. The window is twice the debounce time so that a bouncing
+ * contact, which keeps restarting the count, still gets confirmed.
+ */
+static volatile uint16_t debounce_armed = 0U;
 
 /* USER CODE END PV */
 
@@ -187,6 +197,30 @@ void SysTick_Handler(void)
   
   /* USER CODE BEGIN SysTick_IRQn 1 */
 
+  /*
+   * The button pin is sampled only while an edge reported by the EXTI interrupt
+   * is waiting to be confirmed - without an interrupt nothing is read here.
+   * One tick = one sample, so DEBOUNCE_SAMPLES ticks = DEBOUNCE_MS (100 ms).
+   */
+  if(debounce_armed > 0U)
+  {
+	  EDGE_TYPE edge = edgeDetect(BUTTON_GET_STATE, DEBOUNCE_SAMPLES);
+
+	  debounce_armed--;
+
+	  if(edge != NONE)
+	  {
+		  /* Confirmed - nothing left to sample until the next edge arrives. */
+		  debounce_armed = 0U;
+
+		  /* LED changes its state only on the rising edge of the input signal. */
+		  if(edge == RISE)
+		  {
+			  LED_TOGGLE;
+		  }
+	  }
+  }
+
   /* USER CODE END SysTick_IRQn 1 */
 }
 
@@ -198,6 +232,28 @@ void SysTick_Handler(void)
 /******************************************************************************/
 
 /* USER CODE BEGIN 1 */
+
+/**
+  * @brief This function handles the external interrupt of the button on pin PA3 (EXTI line 3).
+  *
+  *        The handler must not block - it only acknowledges the request and hands the
+  *        debounce over to the SysTick interrupt, so it returns within microseconds and
+  *        can be entered again immediately. Every further edge (a bouncing contact)
+  *        re-enters this handler and restarts the debounce, which is exactly the
+  *        "a deviating sample restarts the count" rule from the previous assignment.
+  */
+void EXTI3_IRQHandler(void)
+{
+	if(EXTI_LINE3_IS_PENDING)
+	{
+		/* Acknowledge first - an edge arriving from now on sets the request again. */
+		EXTI_LINE3_CLEAR_PENDING;
+
+		/* Let the SysTick interrupt confirm the new state of the pin.
+		 * A bouncing contact re-enters this handler and restarts the window. */
+		debounce_armed = (uint16_t)(2U * DEBOUNCE_SAMPLES);
+	}
+}
 
 /* USER CODE END 1 */
 /************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

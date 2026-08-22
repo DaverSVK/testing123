@@ -1,10 +1,10 @@
-name: Assignment 2 - Edge detection and debounce
+name: Assignment 3 - EXTI interrupt and debounce
 
 on:
   push:
-    branches: [ zadanie_cv1, zadanie_cv2, main, master ]
+    branches: [ zadanie_cv1, zadanie_cv2, zadanie_cv3, main, master ]
   pull_request:
-    branches: [ zadanie_cv1, zadanie_cv2, main, master ]
+    branches: [ zadanie_cv1, zadanie_cv2, zadanie_cv3, main, master ]
 
 env:
   BUILD_DIR: build
@@ -30,7 +30,7 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv2 tests
+        run: mv _tests-private/cv3 tests
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -77,7 +77,7 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv2 tests
+        run: mv _tests-private/cv3 tests
 
       - name: Install ARM binutils and pytest
         run: |
@@ -95,6 +95,7 @@ jobs:
         run: |
           arm-none-eabi-objdump -d "$BUILD_DIR/$ELF_NAME" > disassembly.txt
           arm-none-eabi-nm --numeric-sort "$BUILD_DIR/$ELF_NAME" > symbols.txt
+          arm-none-eabi-objdump -s -j .isr_vector "$BUILD_DIR/$ELF_NAME" > vectors.txt
 
       - name: Run binary analysis tests
         run: |
@@ -114,6 +115,7 @@ jobs:
             binary-test-results.txt
             disassembly.txt
             symbols.txt
+            vectors.txt
             build/vrs_cv2_ll_programming.elf
           retention-days: 30
 
@@ -171,7 +173,7 @@ jobs:
           path: _tests-private
 
       - name: Place tests
-        run: mv _tests-private/cv2 tests
+        run: mv _tests-private/cv3 tests
 
       - name: Download ELF
         uses: actions/download-artifact@v4
@@ -201,14 +203,14 @@ jobs:
 
           exit 0
 
-      - name: Test edge detection and debounce on PA3/PA4
+      - name: Test the EXTI interrupt and the debounce on PA3/PA4
         id: hardware_test
         if: steps.flash.outputs.flash_status == 'PASS'
         continue-on-error: true
         run: |
           set +e
 
-          python3 tests/hw_debounce_test.py
+          python3 tests/hw_interrupt_test.py
           TEST_STATUS=$?
 
           if [ "$TEST_STATUS" -eq 0 ]; then
@@ -257,12 +259,12 @@ jobs:
             repository: DaverSVK/vrs-tests
             token: ${{ secrets.TESTS_REPO_TOKEN }}
             ref: main
-            sparse-checkout: cv2
+            sparse-checkout: cv3
             sparse-checkout-cone-mode: true
             path: _tests-private
 
         - name: Place tests
-          run: mv _tests-private/cv2 tests
+          run: mv _tests-private/cv3 tests
 
         - name: Install pytest
           run: pip install pytest

@@ -7,8 +7,11 @@ build/
 *.hex
 disassembly.txt
 symbols.txt
+vectors.txt
 hardware-result.txt
 hardware-results.json
+
+__pycache__/
 
 # Tests are injected by CI — not stored in student repo
 tests/

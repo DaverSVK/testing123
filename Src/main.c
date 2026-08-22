@@ -96,10 +96,12 @@ int main(void)
    * Button (input signal) must be connected to the GPIO port A and its pin 3.
    * LED (output signal) must be connected to the GPIO port A and its pin 4.
    *
-   * In header file "assignment.h" define macros for MCU registers access, the "EDGE_TYPE"
-   * enum and the "edgeDetect" function prototype.
+   * The button must be the source of an external interrupt (EXTI line 3) - the pin state
+   * must NOT be read in the main loop. The LED changes its state in the interrupt.
+   *
+   * In header file "assignment.h" define macros for MCU registers access (GPIO, RCC,
+   * SYSCFG, EXTI, NVIC), the "EDGE_TYPE" enum and the "edgeDetect" function prototype.
    * Code in this file must use these macros for the peripherals setup.
-   * The LED changes its state only when the chosen edge type is detected on the input pin.
    */
 
 
@@ -131,30 +133,43 @@ int main(void)
 	*GPIOA_PUPDR_REG &= ~(0x3UL << 8);
 
 
+  /* External interrupt from the button on pin PA3 */
+
+	//type your code for the EXTI and NVIC setup here:
+
+	/* Clock for the SYSCFG peripheral - RCC_APB2ENR bit 0 (SYSCFGEN) */
+	*RCC_APB2ENR_REG |= (1UL << 0);
+	/* PA3 as the source of the EXTI line 3: EXTICR1 bits [15:12] = 0000 (port A) */
+	*SYSCFG_EXTICR1_REG &= ~(0xFUL << 12);
+	/* Request the interrupt on both edges of the input signal. The LED is changed
+	 * only on the chosen one (rising), but the release of the button has to be seen
+	 * as well - otherwise the debounce would not know that the pin went back to its
+	 * idle level and the next press could not be detected. */
+	*EXTI_RTSR_REG |= (1UL << BUTTON_EXTI_LINE);
+	*EXTI_FTSR_REG |= (1UL << BUTTON_EXTI_LINE);
+	/* Drop a request possibly latched while the pins were being configured */
+	EXTI_LINE3_CLEAR_PENDING;
+	/* Unmask the interrupt of the EXTI line 3 */
+	*EXTI_IMR_REG |= (1UL << BUTTON_EXTI_LINE);
+	/* Enable the EXTI3 interrupt in the NVIC (EXTI3_IRQn = 9) */
+	*NVIC_ISER0_REG = (1UL << BUTTON_EXTI_IRQ_NUM);
+
+	/* 1 ms SysTick interrupt - the time base of the debounce */
+	LL_SYSTICK_EnableIT();
+
+
   /* LED is off after the start-up */
-  uint8_t led_state = 0U;
   LED_OFF;
 
   while (1)
   {
-	  /* One sample of the input pin per loop pass -
-	   * SAMPLE_PERIOD_MS * DEBOUNCE_SAMPLES = DEBOUNCE_MS (100 ms) debounce window. */
-	  LL_mDelay(SAMPLE_PERIOD_MS);
-
-	  /* LED changes its state only on the rising edge of the input signal. */
-	  if(edgeDetect(BUTTON_GET_STATE, DEBOUNCE_SAMPLES) == RISE)
-	  {
-		  led_state = !led_state;
-
-		  if(led_state)
-		  {
-			  LED_ON;
-		  }
-		  else
-		  {
-			  LED_OFF;
-		  }
-	  }
+	  /*
+	   * Nothing is done here - the button is not read and the LED is not driven.
+	   * The whole application runs in the interrupt handlers in "stm32f3xx_it.c":
+	   *   EXTI3_IRQHandler - reports an edge on PA3 and starts the debounce
+	   *   SysTick_Handler  - confirms the edge and changes the state of the LED
+	   */
+	  __WFI();
   }
 
 }
