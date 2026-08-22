@@ -37,7 +37,9 @@ void USART2_RegisterCallback(void *callback)
 
 /* Space for global variables, if you need them */
 
-	// type global variables here
+	/* The transmitter sends at most 20 characters in one burst - once fewer than
+	 * that many bytes are left in the buffer, the channel has to be re-armed. */
+	#define USART2_RX_RESERVE	20U
 
 
 /* USART2 init function */
@@ -48,11 +50,11 @@ void MX_USART2_UART_Init(void)
   LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
   /* Peripheral clock enable */
   LL_APB1_GRP1_EnableClock(LL_APB1_GRP1_PERIPH_USART2);
-  
+
   LL_AHB1_GRP1_EnableClock(LL_AHB1_GRP1_PERIPH_GPIOA);
-  /**USART2 GPIO Configuration  
+  /**USART2 GPIO Configuration
   PA2   ------> USART2_TX
-  PA15   ------> USART2_RX 
+  PA15   ------> USART2_RX
   */
   GPIO_InitStruct.Pin = LL_GPIO_PIN_2|LL_GPIO_PIN_15;
   GPIO_InitStruct.Mode = LL_GPIO_MODE_ALTERNATE;
@@ -62,22 +64,32 @@ void MX_USART2_UART_Init(void)
   GPIO_InitStruct.Alternate = LL_GPIO_AF_7;
   LL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*
-   * USART2 DMA configuration. Write configuration for DMA used by USART2 for data Rx/Tx with INTERRUPTS.
-   * Rx memory buffer will be handled in normal mode, not circular!
-   * You can use configuration from example program and modify it.
-   * For more information about DMA registers, refer to reference manual.
-   */
-  
-  /* USART2_RX Init */
+  /* USART2_RX Init - peripheral to memory, NORMAL mode (not circular) */
+  LL_DMA_SetDataTransferDirection(DMA1, LL_DMA_CHANNEL_6, LL_DMA_DIRECTION_PERIPH_TO_MEMORY);
+  LL_DMA_SetChannelPriorityLevel(DMA1, LL_DMA_CHANNEL_6, LL_DMA_PRIORITY_MEDIUM);
+  LL_DMA_SetMode(DMA1, LL_DMA_CHANNEL_6, LL_DMA_MODE_NORMAL);
+  LL_DMA_SetPeriphIncMode(DMA1, LL_DMA_CHANNEL_6, LL_DMA_PERIPH_NOINCREMENT);
+  LL_DMA_SetMemoryIncMode(DMA1, LL_DMA_CHANNEL_6, LL_DMA_MEMORY_INCREMENT);
+  LL_DMA_SetPeriphSize(DMA1, LL_DMA_CHANNEL_6, LL_DMA_PDATAALIGN_BYTE);
+  LL_DMA_SetMemorySize(DMA1, LL_DMA_CHANNEL_6, LL_DMA_MDATAALIGN_BYTE);
+  LL_DMA_ConfigAddresses(DMA1, LL_DMA_CHANNEL_6,
+                         LL_USART_DMA_GetRegAddr(USART2, LL_USART_DMA_REG_DATA_RECEIVE),
+                         (uint32_t)bufferUSART2dma,
+                         LL_DMA_DIRECTION_PERIPH_TO_MEMORY);
+  LL_DMA_SetDataLength(DMA1, LL_DMA_CHANNEL_6, DMA_USART2_BUFFER_SIZE);
+  LL_DMA_EnableIT_HT(DMA1, LL_DMA_CHANNEL_6);
+  LL_DMA_EnableIT_TC(DMA1, LL_DMA_CHANNEL_6);
 
-  	  // type DMA USART Rx configuration here
-
-
-  /* USART2_TX Init */
-
-	  // type DMA USART Tx configuration here
-
+  /* USART2_TX Init - memory to peripheral, normal mode */
+  LL_DMA_SetDataTransferDirection(DMA1, LL_DMA_CHANNEL_7, LL_DMA_DIRECTION_MEMORY_TO_PERIPH);
+  LL_DMA_SetChannelPriorityLevel(DMA1, LL_DMA_CHANNEL_7, LL_DMA_PRIORITY_MEDIUM);
+  LL_DMA_SetMode(DMA1, LL_DMA_CHANNEL_7, LL_DMA_MODE_NORMAL);
+  LL_DMA_SetPeriphIncMode(DMA1, LL_DMA_CHANNEL_7, LL_DMA_PERIPH_NOINCREMENT);
+  LL_DMA_SetMemoryIncMode(DMA1, LL_DMA_CHANNEL_7, LL_DMA_MEMORY_INCREMENT);
+  LL_DMA_SetPeriphSize(DMA1, LL_DMA_CHANNEL_7, LL_DMA_PDATAALIGN_BYTE);
+  LL_DMA_SetMemorySize(DMA1, LL_DMA_CHANNEL_7, LL_DMA_MDATAALIGN_BYTE);
+  LL_DMA_SetPeriphAddress(DMA1, LL_DMA_CHANNEL_7,
+                          LL_USART_DMA_GetRegAddr(USART2, LL_USART_DMA_REG_DATA_TRANSMIT));
 
   /* USART2 interrupt Init */
   NVIC_SetPriority(USART2_IRQn, 0);
@@ -95,8 +107,11 @@ void MX_USART2_UART_Init(void)
   LL_USART_DisableIT_CTS(USART2);
 
   /* Enable USART2 peripheral and interrupts*/
-
-  	  //type your code here:
+  LL_USART_EnableDMAReq_RX(USART2);
+  LL_USART_EnableDMAReq_TX(USART2);
+  LL_USART_EnableIT_IDLE(USART2);
+  LL_USART_Enable(USART2);
+  LL_DMA_EnableChannel(DMA1, LL_DMA_CHANNEL_6);
 }
 
 
@@ -121,7 +136,31 @@ void USART2_PutBuffer(uint8_t *buffer, uint8_t length)
  */
 void USART2_CheckDmaReception(void)
 {
-	//type your implementation here
+	/* Position already handed to the callback - has to survive between the calls. */
+	static uint16_t readPos = 0;
+
+	/* In normal + increment mode CNDTR counts down from the programmed length. */
+	uint16_t writePos = (uint16_t)(DMA_USART2_BUFFER_SIZE
+	                               - LL_DMA_GetDataLength(DMA1, LL_DMA_CHANNEL_6));
+
+	while(readPos < writePos)
+	{
+		if(USART2_ProcessData != 0)
+		{
+			USART2_ProcessData(bufferUSART2dma[readPos]);
+		}
+		readPos++;
+	}
+
+	/* Less space left than one burst - re-arm the channel before it can overflow.
+	 * The length can only be reprogrammed while the channel is disabled. */
+	if((DMA_USART2_BUFFER_SIZE - writePos) <= USART2_RX_RESERVE)
+	{
+		LL_DMA_DisableChannel(DMA1, LL_DMA_CHANNEL_6);
+		LL_DMA_SetDataLength(DMA1, LL_DMA_CHANNEL_6, DMA_USART2_BUFFER_SIZE);
+		LL_DMA_EnableChannel(DMA1, LL_DMA_CHANNEL_6);
+		readPos = 0;
+	}
 }
 
 
