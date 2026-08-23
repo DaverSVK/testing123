@@ -47,12 +47,22 @@ void proccesDmaData(uint8_t sign);
 	/* Period of the buffer state message - 0.5 Hz. */
 	#define REPORT_PERIOD_MS	2000U
 
+	/* Several sets of characters can arrive in one DMA transfer, so proccesDmaData()
+	 * finishes all of them before main() runs again. A single hand-over slot would
+	 * drop every set but the last one, so the completed sets go into a queue.
+	 * The interrupt writes the tail, the main loop reads the head. */
+	#define FRAME_QUEUE_LEN		8U
+
 	letter_count_ letterCount;
 
 	static char    frameBuffer[FRAME_PAYLOAD_MAX + 1U];
 	static uint8_t frameLength = 0;
 	static uint8_t frameOpen   = 0;
-	static volatile uint8_t frameReady = 0;
+
+	static char          frameQueue[FRAME_QUEUE_LEN][FRAME_PAYLOAD_MAX + 1U];
+	static letter_count_ frameQueueCount[FRAME_QUEUE_LEN];
+	static volatile uint8_t frameQueueHead = 0;
+	static volatile uint8_t frameQueueTail = 0;
 
 	static char txBuffer[96];
 
@@ -100,17 +110,20 @@ int main(void)
 		  msCounter++;
 	  }
 
-	  if(frameReady != 0)
+	  while(frameQueueHead != frameQueueTail)
 	  {
-		  frameReady = 0;
+		  /* The DMA keeps reading txBuffer until the previous transfer ends, so
+		   * wait before overwriting it, not after filling it in. */
+		  while(LL_DMA_IsEnabledChannel(DMA1, LL_DMA_CHANNEL_7) != 0);
 
 		  length = sprintf(txBuffer,
 		                   "Valid string: %s, lower-case: %d, upper-case: %d\r\n",
-		                   frameBuffer,
-		                   letterCount.small_letter,
-		                   letterCount.capital_letter);
+		                   frameQueue[frameQueueHead],
+		                   frameQueueCount[frameQueueHead].small_letter,
+		                   frameQueueCount[frameQueueHead].capital_letter);
 
-		  while(LL_DMA_IsEnabledChannel(DMA1, LL_DMA_CHANNEL_7) != 0);
+		  frameQueueHead = (uint8_t)((frameQueueHead + 1U) % FRAME_QUEUE_LEN);
+
 		  USART2_PutBuffer((uint8_t*)txBuffer, (uint8_t)length);
 	  }
 
@@ -122,13 +135,14 @@ int main(void)
 		                        - LL_DMA_GetDataLength(DMA1, LL_DMA_CHANNEL_6));
 		  load = (100.0f * (float)occupied) / (float)DMA_USART2_BUFFER_SIZE;
 
+		  while(LL_DMA_IsEnabledChannel(DMA1, LL_DMA_CHANNEL_7) != 0);
+
 		  length = sprintf(txBuffer,
 		                   "Buffer capacity: %d bytes, occupied memory: %d bytes, load [in %%]: %.1f%%\r\n",
 		                   (int)DMA_USART2_BUFFER_SIZE,
 		                   (int)occupied,
 		                   load);
 
-		  while(LL_DMA_IsEnabledChannel(DMA1, LL_DMA_CHANNEL_7) != 0);
 		  USART2_PutBuffer((uint8_t*)txBuffer, (uint8_t)length);
 	  }
   }
@@ -192,9 +206,23 @@ void proccesDmaData(uint8_t sign)
 
 	if(sign == '$')
 	{
+		uint8_t next = (uint8_t)((frameQueueTail + 1U) % FRAME_QUEUE_LEN);
+		uint8_t i;
+
 		frameBuffer[frameLength] = '\0';
-		frameOpen  = 0;
-		frameReady = 1;
+		frameOpen = 0;
+
+		/* Drop the set only if the main loop is so far behind that the queue is
+		 * genuinely full - otherwise every completed set is kept. */
+		if(next != frameQueueHead)
+		{
+			for(i = 0U; i <= frameLength; i++)
+			{
+				frameQueue[frameQueueTail][i] = frameBuffer[i];
+			}
+			frameQueueCount[frameQueueTail] = letterCount;
+			frameQueueTail = next;
+		}
 		return;
 	}
 
