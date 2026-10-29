@@ -1,0 +1,220 @@
+# Batch grading of student repos for assignment 4 (USART2 + DMA).
+#
+# Lives ONLY on the orphan branch "cv4-grader" of DaverSVK/testing123 (where the
+# Raspberry Pi runner is registered), never on a zadanie_cv* branch - those are copied
+# into student repos. grade_repos.py starts one run per student repo by pushing an
+# empty commit to grade/cv4/<slug>; the commit message is the job, as JSON:
+#
+#   {"repo": "owner/name", "ref": "branch", "subdir": "", "baseline": "zadanie_cv4",
+#    "hardware": true}
+#
+# Anti-tamper: the student contributes only Src/ and Inc/. Makefile.ci, Drivers,
+# Startup, the linker script and the tests all come from the teacher baseline, so
+# no student file ever executes on a runner - only the firmware runs, on the MCU.
+name: Batch grading (cv4)
+
+on:
+  push:
+    branches: ["grade/cv4/**"]
+
+env:
+  BUILD_DIR: build
+  ELF_NAME: usart_DMA.elf
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build + static + binary analysis on GitHub's runners
+  # ---------------------------------------------------------------------------
+  analysis:
+    name: Build, static and binary analysis
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      built: ${{ steps.build.outputs.built }}
+      hardware: ${{ steps.job.outputs.hardware }}
+
+    steps:
+      - name: Read the job
+        id: job
+        env:
+          JOB: ${{ github.event.head_commit.message }}
+        run: |
+          python3 - <<'EOF'
+          import json, os, re, sys
+          job = json.loads(os.environ["JOB"])
+          repo = job.get("repo", "")
+          ref = job.get("ref", "")
+          subdir = job.get("subdir", "").strip("/")
+          baseline = job.get("baseline", "zadanie_cv4")
+          if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+              sys.exit("bad repo %r" % repo)
+          for name, value in (("ref", ref), ("subdir", subdir), ("baseline", baseline)):
+              if not re.fullmatch(r"[\w./ -]*", value) or ".." in value:
+                  sys.exit("bad %s %r" % (name, value))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("repo=%s\nref=%s\nsubdir=%s\nbaseline=%s\n" % (repo, ref, subdir, baseline))
+              out.write("hardware=%s\n" % ("true" if job.get("hardware", True) else "false"))
+          EOF
+
+      - name: Checkout the teacher baseline
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.job.outputs.baseline }}
+          path: proj
+
+      - name: Checkout the student repo
+        id: student
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.job.outputs.repo }}
+          ref: ${{ steps.job.outputs.ref }}
+          # Needed for private student repos; public ones work with the default token.
+          token: ${{ secrets.STUDENT_REPO_TOKEN || github.token }}
+          path: student
+          persist-credentials: false
+
+      - name: Overlay the student's Src/ and Inc/
+        id: overlay
+        env:
+          SUBDIR: ${{ steps.job.outputs.subdir }}
+          CHECKOUT: ${{ steps.student.outcome }}
+        run: |
+          mkdir -p proj/results
+          status() { echo "$1" > proj/results/status.txt; }
+          if [ "$CHECKOUT" != "success" ]; then
+            status "the student repo or branch could not be checked out"; exit 1
+          fi
+          SRC="student${SUBDIR:+/$SUBDIR}"
+          if [ ! -f "$SRC/Src/usart.c" ] || [ ! -f "$SRC/Inc/usart.h" ]; then
+            status "no Src/usart.c + Inc/usart.h in '${SUBDIR:-/}'"; exit 1
+          fi
+          git -C student rev-parse HEAD > proj/results/student-sha.txt
+          rm -rf proj/Src proj/Inc
+          cp -r "$SRC/Src" "$SRC/Inc" proj/
+          cp -r proj/cv4 proj/tests
+          status "ok"
+
+      - name: Install ARM GCC toolchain and pytest
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq gcc-arm-none-eabi binutils-arm-none-eabi make
+          pip install -q pytest
+
+      - name: Build firmware
+        id: build
+        working-directory: proj
+        run: |
+          if make -f Makefile.ci all > results/build.log 2>&1 && [ -f "$BUILD_DIR/$ELF_NAME" ]; then
+            echo "built=true" >> "$GITHUB_OUTPUT"
+            arm-none-eabi-objdump -d "$BUILD_DIR/$ELF_NAME" > disassembly.txt
+            arm-none-eabi-nm --numeric-sort "$BUILD_DIR/$ELF_NAME" > symbols.txt
+            arm-none-eabi-objdump -s -j .isr_vector "$BUILD_DIR/$ELF_NAME" > vectors.txt
+          else
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            tail -40 results/build.log
+          fi
+
+      - name: Static analysis
+        working-directory: proj
+        run: |
+          python3 -m pytest tests/test_assignment.py -q --tb=no --no-header \
+            -p no:cacheprovider --junitxml=results/static.xml || true
+
+      - name: Binary analysis
+        if: steps.build.outputs.built == 'true'
+        working-directory: proj
+        run: |
+          python3 -m pytest tests/test_binary.py -q --tb=no --no-header \
+            -p no:cacheprovider --junitxml=results/binary.xml || true
+
+      - name: Upload workspace
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workspace
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            proj/results
+            proj/Src
+            proj/Inc
+            proj/tests
+            proj/build/usart_DMA.elf
+            proj/disassembly.txt
+            proj/symbols.txt
+            proj/vectors.txt
+
+  # ---------------------------------------------------------------------------
+  # Flash + hardware test on the Raspberry Pi (one board, so runs queue up)
+  # ---------------------------------------------------------------------------
+  hardware:
+    name: Raspberry Pi hardware USART test
+    runs-on: [self-hosted, Linux, ARM64]
+    needs: analysis
+    if: needs.analysis.outputs.built == 'true' && needs.analysis.outputs.hardware == 'true'
+    timeout-minutes: 15
+
+    env:
+      STM32_TARGET_CFG: target/stm32f3x.cfg
+      SERIAL_PORT: ""
+
+    steps:
+      # The self-hosted workspace survives between runs - never grade stale files.
+      - name: Clean workspace
+        run: rm -rf ws
+
+      - name: Download workspace
+        uses: actions/download-artifact@v4
+        with:
+          name: workspace
+          path: ws
+
+      - name: Ensure pyserial is available
+        run: |
+          python3 -c "import serial" 2>/dev/null \
+            || python3 -m pip install --user --quiet pyserial \
+            || python3 -m pip install --user --quiet --break-system-packages pyserial \
+            || sudo apt-get install -y python3-serial
+
+      - name: Flash STM32
+        id: flash
+        working-directory: ws
+        run: |
+          set +e
+          # The F303K8 has 12 KiB SRAM; the stock 16 KiB work area overruns it.
+          flash_board() {
+            openocd -f interface/stlink.cfg -c "set WORKAREASIZE 0x3000" \
+              -f "$STM32_TARGET_CFG" "$@" -c "init" -c "reset halt" \
+              -c "program $BUILD_DIR/$ELF_NAME verify reset exit"
+          }
+          flash_board > results/flash.log 2>&1
+          STATUS=$?
+          if [ "$STATUS" -ne 0 ]; then
+            echo "retrying with connect under reset" >> results/flash.log
+            flash_board -c "reset_config srst_only srst_nogate connect_assert_srst" \
+              >> results/flash.log 2>&1
+            STATUS=$?
+          fi
+          tail -5 results/flash.log
+          [ "$STATUS" -eq 0 ] && echo "ok=true" >> "$GITHUB_OUTPUT" \
+                              || echo "ok=false" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Hardware test
+        if: steps.flash.outputs.ok == 'true'
+        working-directory: ws
+        run: |
+          sleep 3
+          python3 tests/hw_usart_test.py || true
+
+      - name: Upload hardware results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hardware
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ws/hardware-results.json
+            ws/results/flash.log
