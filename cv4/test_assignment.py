@@ -99,6 +99,44 @@ def _function_body(source: str, name: str):
     return None
 
 
+C_KEYWORDS = {"if", "else", "while", "for", "do", "switch", "return", "sizeof"}
+
+
+def _top_level_functions(source: str) -> dict:
+    """{name: body} of every function defined at file scope (brace depth 0)."""
+    clean = _strip_comments(source)
+    found = {}
+    depth, pos = 0, 0
+    for m in re.finditer(r"\b([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{", clean):
+        depth += clean.count("{", pos, m.start()) - clean.count("}", pos, m.start())
+        pos = m.start()
+        if depth == 0 and m.group(1) not in C_KEYWORDS:
+            body = _matching_brace_body(clean, m.end() - 1)
+            if body is not None:
+                found.setdefault(m.group(1), body)
+    return found
+
+
+def _body_with_helpers(source: str, name: str):
+    """
+    Body of `name` followed by the bodies of the functions defined in the same file
+    that it calls, transitively. Moving part of the work into a helper function is a
+    legitimate design the assignment does not forbid.
+    """
+    functions = _top_level_functions(source)
+    if name not in functions:
+        return None
+    seen, todo, parts = {name}, [name], []
+    while todo:
+        body = functions[todo.pop(0)]
+        parts.append(body)
+        for callee in functions:
+            if callee not in seen and re.search(rf"\b{re.escape(callee)}\s*\(", body):
+                seen.add(callee)
+                todo.append(callee)
+    return "\n".join(parts)
+
+
 def _main_body(source: str):
     return _function_body(source, "main")
 
@@ -175,11 +213,11 @@ def _usart_init_body():
 
 
 def _check_dma_body():
-    return _function_body(_read(USART_C), "USART2_CheckDmaReception")
+    return _body_with_helpers(_read(USART_C), "USART2_CheckDmaReception")
 
 
 def _process_body():
-    return _function_body(_read(MAIN_C), "proccesDmaData")
+    return _body_with_helpers(_read(MAIN_C), "proccesDmaData")
 
 
 # =============================================================================
@@ -628,9 +666,13 @@ def test_process_dma_data_classifies_letter_case():
 
 
 def test_frame_timeout_is_35_characters():
-    """A frame that gets no '$' within 35 characters is thrown away."""
+    """
+    A frame that gets no '$' within 35 characters is thrown away. Depending on how the
+    characters are counted the limit is written as 34, 35 or 36 - the hardware test
+    checks the exact boundary.
+    """
     source = _strip_char_literals(_strip_comments(_read(MAIN_C)))
-    assert re.search(r"(?<![\w.])35[uUlL]*(?![\w.])", source), (
+    assert re.search(r"(?<![\w.])3[456][uUlL]*(?![\w.])", source), (
         "The number 35 does not appear in Src/main.c. Task 5: if the closing '$' does "
         "not arrive within 35 characters of the '#', the collected data is discarded "
         "and the function waits for a new start character."
@@ -686,12 +728,16 @@ def test_buffer_state_message_format():
     """
     Message format -
     'Buffer capacity: %d bytes, occupied memory: %d bytes, load [in %]: %f%'
+
+    What is graded is the text on the terminal, so the load may also be printed as an
+    integer part and a fraction ("%u.%u%%") instead of with a float conversion.
     """
     text = _joined_format_text(_read(MAIN_C))
     num = r"%[-+ #0-9.]*(?:h?[diu]|l[diu])"
+    load = rf"(?:%[-+ #0-9.]*[fgeFGE]|{num}\s*[.,]\s*{num})"
     pattern = (rf"Buffer\s+capacity:\s*{num}\s*bytes\s*,\s*"
                rf"occupied\s+memory:\s*{num}\s*bytes\s*,\s*"
-               rf"load\s*\[\s*in\s*%\s*\]\s*:\s*%[-+ #0-9.]*[fgeFGE]")
+               rf"load\s*\[\s*in\s*%\s*\]\s*:\s*{load}")
     assert re.search(pattern, text, re.IGNORECASE), (
         "The periodic buffer-state message does not match the required format.\n"
         "  expected: \"Buffer capacity: %d bytes, occupied memory: %d bytes, "
@@ -717,10 +763,21 @@ def test_buffer_state_uses_the_real_dma_state():
 
 
 def test_periodic_transmission_is_every_two_seconds():
-    """Transmission frequency - 0.5 Hz, i.e. one message every 2000 ms."""
+    """
+    Transmission frequency - 0.5 Hz, i.e. one message every 2000 ms. The hardware test
+    measures the real period; this only looks for a plausible 2 s time base.
+    """
     source = _strip_char_literals(_strip_comments(_read(MAIN_C)))
-    assert re.search(r"(?<![\w.])(2000|500)[uUlL]*(?![\w.])", source), (
-        "Src/main.c contains neither 2000 nor 500, so nothing looks like a 0.5 Hz "
-        "time base. The buffer-state message has to be sent every 2 seconds - either "
-        "count 2000 SysTick milliseconds or call LL_mDelay(2000)."
+    # 2000 / 500 ms, or 1999 / 499 as a timer auto-reload value
+    milliseconds = re.search(r"(?<![\w.])(2000|1999|500|499)[uUlL]*(?![\w.])", source)
+    # a cycle counter (DWT->CYCCNT, SysTick) scaled from the core clock
+    core_clock = re.search(r"\bSystemCoreClock\b\s*\)?\s*[*/]|[*/]\s*\(?\s*SystemCoreClock\b",
+                           source)
+    # 2 s worth of cycles at 8 / 64 / 72 MHz
+    cycles = re.search(r"(?<![\w.])(16000000|128000000|144000000)[uUlL]*(?![\w.])", source)
+    assert milliseconds or core_clock or cycles, (
+        "Src/main.c contains no recognisable 2 second time base (2000 ms, 500 ms, or a "
+        "cycle count derived from SystemCoreClock). The buffer-state message has to be "
+        "sent every 2 seconds - for example count 2000 SysTick milliseconds or call "
+        "LL_mDelay(2000)."
     )

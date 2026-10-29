@@ -29,6 +29,8 @@ DISASM_FILE  = REPO_ROOT / "disassembly.txt"
 SYMBOLS_FILE = REPO_ROOT / "symbols.txt"
 VECTORS_FILE = REPO_ROOT / "vectors.txt"
 ELF_FILE     = REPO_ROOT / "build" / "usart_DMA.elf"
+SRC_DIR      = REPO_ROOT / "Src"
+MAIN_C       = SRC_DIR / "main.c"
 
 # -- Peripheral addresses -----------------------------------------------------
 USART2_BASE   = 0x40004400
@@ -110,6 +112,42 @@ def _instruction_count(block: str) -> int:
 def _calls(block: str, callee: str) -> bool:
     return bool(re.search(rf"\bbl(?:\.w)?\s+[0-9a-f]+\s*<{re.escape(callee)}>",
                           block, re.IGNORECASE))
+
+
+def _student_functions() -> set:
+    """Names of the functions defined in Src/*.c - the call graph walk stays inside them."""
+    names = set()
+    for path in SRC_DIR.glob("*.c"):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+        text = re.sub(r"//[^\n]*", " ", text)
+        names.update(re.findall(
+            r"^[ \t]*(?:[A-Za-z_]\w*[ \t\*]+)+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{",
+            text, re.MULTILINE))
+    return names - {"if", "else", "while", "for", "switch", "return", "sizeof"}
+
+
+def _reachable_block(name: str):
+    """
+    Disassembly of `name` followed by every function from Src/*.c that it calls,
+    transitively. Splitting the work into helper functions is a legitimate design;
+    library code (newlib, the inline LL helpers) is deliberately not followed.
+    """
+    first = _function_block(name)
+    if first is None:
+        return None
+    own = _student_functions()
+    seen, todo, blocks = {name}, [first], []
+    while todo:
+        block = todo.pop(0)
+        blocks.append(block)
+        for callee in re.findall(r"\bbl(?:\.w)?\s+[0-9a-f]+\s*<(\w+)>", block, re.IGNORECASE):
+            if callee in own and callee not in seen:
+                seen.add(callee)
+                callee_block = _function_block(callee)
+                if callee_block is not None:
+                    todo.append(callee_block)
+    return "\n\n".join(blocks)
 
 
 def _addr_in(block: str, addr: int) -> bool:
@@ -291,8 +329,14 @@ def test_main_does_not_read_rdr():
 def test_printf_float_is_linked():
     """
     The buffer load is printed with '%f'. newlib-nano leaves the floating point
-    formatter out unless the link line asks for it.
+    formatter out unless the link line asks for it. Only relevant when main.c really
+    uses a float conversion - printing the load as "%u.%u" needs no formatter.
     """
+    if MAIN_C.exists():
+        source = MAIN_C.read_text(encoding="utf-8", errors="replace").replace("%%", "")
+        literals = " ".join(re.findall(r'"((?:\\.|[^"\\])*)"', source))
+        if not re.search(r"%[-+ #0-9.]*[fgeFGE]", literals):
+            return
     symbols = _symbol_table()
     has_float = any("printf_float" in name for name in symbols)
     assert has_float, (
@@ -317,7 +361,7 @@ def test_check_dma_reception_present():
 
 def test_check_dma_reception_is_not_empty():
     """An unimplemented stub compiles to little more than a return."""
-    block = _function_block("USART2_CheckDmaReception")
+    block = _reachable_block("USART2_CheckDmaReception")
     if block is None:
         return
     count = _instruction_count(block)
@@ -331,7 +375,7 @@ def test_check_dma_reception_is_not_empty():
 
 def test_check_dma_reception_reads_transfer_counter():
     """The number of received bytes comes from CNDTR of channel 6."""
-    block = _function_block("USART2_CheckDmaReception")
+    block = _reachable_block("USART2_CheckDmaReception")
     if block is None:
         return
     reads_counter = (_addr_in(block, DMA1_CH6_NDTR)
@@ -348,7 +392,7 @@ def test_check_dma_reception_reads_transfer_counter():
 def test_check_dma_reception_uses_the_rx_buffer():
     """The received bytes are read out of bufferUSART2dma."""
     symbols = _symbol_table()
-    block = _function_block("USART2_CheckDmaReception")
+    block = _reachable_block("USART2_CheckDmaReception")
     if block is None or "bufferUSART2dma" not in symbols:
         return
     buf_addr, _ = symbols["bufferUSART2dma"]
@@ -361,7 +405,7 @@ def test_check_dma_reception_uses_the_rx_buffer():
 
 def test_check_dma_reception_does_not_delay():
     """It runs in interrupt context and must not block."""
-    block = _function_block("USART2_CheckDmaReception")
+    block = _reachable_block("USART2_CheckDmaReception")
     if block is None:
         return
     for delay in ("LL_mDelay", "HAL_Delay", "LL_Init1msTick"):
@@ -391,7 +435,7 @@ def test_process_dma_data_present():
 
 def test_process_dma_data_is_not_empty():
     """An unimplemented stub compiles to little more than a return."""
-    block = _function_block("proccesDmaData")
+    block = _reachable_block("proccesDmaData")
     if block is None:
         return
     count = _instruction_count(block)
@@ -404,7 +448,7 @@ def test_process_dma_data_is_not_empty():
 
 def test_frame_delimiters_in_binary():
     """'#' (0x23) opens a frame and '$' (0x24) closes it."""
-    block = _function_block("proccesDmaData")
+    block = _reachable_block("proccesDmaData")
     if block is None:
         return
     missing = []
@@ -420,22 +464,32 @@ def test_frame_delimiters_in_binary():
 
 
 def test_letter_range_bounds_in_binary():
-    """Distinguishing case needs the 'a'/'z' or 'A'/'Z' bounds."""
-    block = _function_block("proccesDmaData")
+    """
+    Distinguishing case needs the 'a'/'z' or 'A'/'Z' bounds - or islower()/isupper(),
+    which newlib expands inline into a lookup in its '_ctype_' table.
+    """
+    block = _reachable_block("proccesDmaData")
     if block is None:
         return
     lower = _immediate_present(block, 0x61) or _immediate_present(block, 0x7A)
     upper = _immediate_present(block, 0x41) or _immediate_present(block, 0x5A)
-    assert lower and upper, (
+
+    symbols = _symbol_table()
+    ctype = any(_calls(block, fn) for fn in ("islower", "isupper", "__locale_ctype_ptr"))
+    if "_ctype_" in symbols:
+        ctype = ctype or _addr_in(block, symbols["_ctype_"][0])
+
+    assert (lower and upper) or ctype, (
         "'proccesDmaData' does not compare the character against both the small "
         "('a' = 0x61 .. 'z' = 0x7A) and the capital ('A' = 0x41 .. 'Z' = 0x5A) letter "
-        "range, so it cannot be counting the two kinds separately."
+        "range, and does not use islower()/isupper() either, so it cannot be counting "
+        "the two kinds separately."
     )
 
 
 def test_callback_registered_in_main():
     """The callback has to be handed to the USART driver."""
-    block = _function_block("main")
+    block = _reachable_block("main")
     if block is None:
         return
     assert _calls(block, "USART2_RegisterCallback"), (
@@ -451,7 +505,7 @@ def test_callback_registered_in_main():
 
 def test_putbuffer_called_from_main():
     """Both required messages are sent through the provided DMA helper."""
-    block = _function_block("main")
+    block = _reachable_block("main")
     if block is None:
         return
     assert _calls(block, "USART2_PutBuffer"), (
@@ -480,7 +534,7 @@ def test_message_strings_in_binary():
 
 def test_buffer_size_immediate_in_binary():
     """The reported capacity has to be the real DMA buffer size."""
-    block = _function_block("main")
+    block = _reachable_block("main")
     if block is None:
         return
     # DMA_USART2_BUFFER_SIZE as shipped is 256; accept any power-of-two buffer.
