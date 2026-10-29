@@ -271,19 +271,24 @@ def score(job, workdir):
     if (hw_dir / "hardware-results.json").exists():
         hardware = json.loads((hw_dir / "hardware-results.json").read_text(encoding="utf-8"))
 
-    def passes(group):
+    def passes(group, assume_hardware=False):
         for node in group["pytest"]:
             ok, _ = tests.get(test_name(node), (False, "not run"))
             if not ok:
                 return False
+        if assume_hardware:
+            return True
         return all(hardware is not None and hardware.get(key) == "PASS"
                    for key in group["hardware"])
 
     info = grade_groups()
     job["groups"] = [{"name": g["name"], "max": g["points"],
                       "points": g["points"] if passes(g) else 0.0,
+                      "potential": g["points"] if passes(g, assume_hardware=True) else 0.0,
                       "needs_hardware": bool(g["hardware"])} for g in info["groups"]]
     job["total"] = sum(g["points"] for g in job["groups"])
+    # What the static + binary tests allow - the score if every hardware check passes.
+    job["potential"] = sum(g["potential"] for g in job["groups"])
     job["max_total"] = info["total"] or sum(g["max"] for g in job["groups"])
     job["prerequisites_ok"] = passes(info["prereq"]) if info["prereq"] else None
     job["dma_ok"] = passes(info["dma"]) if info["dma"] else None
@@ -342,6 +347,8 @@ def write_report(jobs, out):
             continue
         total = ("%s / %s" % (fmt(job["total"]), fmt(job["max_total"]))
                  if "total" in job else "pending")
+        if "total" in job and job["potential"] > job["total"] and not job.get("hardware"):
+            total += " (up to %s)" % fmt(job["potential"])
         lines.append("| %s | `%s` | **%s** | %s |"
                      % (job["repo"], job["ref"], total, hardware_state(job)))
 
@@ -369,6 +376,10 @@ def write_report(jobs, out):
             lines.append("| %s | %s %s / %s |" % (group["name"], mark, fmt(group["points"]),
                                                  fmt(group["max"])))
         lines.append("| **Total** | **%s / %s** |" % (fmt(job["total"]), fmt(job["max_total"])))
+        if not job.get("hardware") and job["potential"] > job["total"]:
+            lines += ["", "Without a hardware result every group scores 0. The static and "
+                          "binary tests allow **%s / %s** if the hardware tests pass."
+                      % (fmt(job["potential"]), fmt(job["max_total"]))]
 
         if not job["built"]:
             lines += ["", "**The firmware does not build** - binary and hardware tests "
@@ -418,8 +429,10 @@ def print_summary(jobs):
         elif "total" in job:
             failed = len(job["failed_static"]) + len(job["failed_binary"])
             hw_failed = len(job["hardware"]["failed"]) if job.get("hardware") else 0
-            log("  %s  %4s/%s  tests failed: %d static/binary, %d hardware  [hw: %s]"
-                % (name, fmt(job["total"]), fmt(job["max_total"]), failed, hw_failed,
+            upto = (" (up to %s)" % fmt(job["potential"])
+                    if not job.get("hardware") and job["potential"] > job["total"] else "")
+            log("  %s  %4s/%s%s  tests failed: %d static/binary, %d hardware  [hw: %s]"
+                % (name, fmt(job["total"]), fmt(job["max_total"]), upto, failed, hw_failed,
                    hardware_state(job)))
         else:
             log("  %s  pending  (%s)" % (name, job.get("state")))
