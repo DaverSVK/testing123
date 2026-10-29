@@ -775,9 +775,15 @@ def test_periodic_transmission_is_every_two_seconds():
                            source)
     # 2 s worth of cycles at 8 / 64 / 72 MHz
     cycles = re.search(r"(?<![\w.])(16000000|128000000|144000000)[uUlL]*(?![\w.])", source)
-    assert milliseconds or core_clock or cycles, (
-        "Src/main.c contains no recognisable 2 second time base (2000 ms, 500 ms, or a "
-        "cycle count derived from SystemCoreClock). The buffer-state message has to be "
+    # a short delay per loop pass times a pass counter, e.g. LL_mDelay(10) and 200 passes
+    delays = [int(d) for d in re.findall(r"\b(?:LL_mDelay|HAL_Delay)\s*\(\s*(\d+)[uUlL]*\s*\)",
+                                         source)]
+    counts = [int(n) for n in re.findall(r"(?<![\w.])(\d+)[uUlL]*(?![\w.])", source)]
+    delay_times_count = any(1500 <= d * n <= 2500 for d in delays if d for n in counts)
+    assert milliseconds or core_clock or cycles or delay_times_count, (
+        "Src/main.c contains no recognisable 2 second time base (2000 ms, 500 ms, a "
+        "delay times a loop count, or a cycle count derived from SystemCoreClock). "
+        "The buffer-state message has to be "
         "sent every 2 seconds - for example count 2000 SysTick milliseconds or call "
         "LL_mDelay(2000)."
     )
