@@ -340,6 +340,8 @@ def hardware_state(job):
         return "PENDING" if job.get("state") != "completed" else "no result"
     if not job.get("built"):
         return "not run (no build)"
+    if job.get("local"):
+        return "not run (graded locally)"
     if not job.get("with_hardware"):
         return "skipped (--no-hardware)"
     if job.get("flash_failed"):
@@ -509,6 +511,141 @@ def collect(job, out, cleanup, final=True):
             check=False)
 
 
+# -- Local mode: nothing leaves this PC -----------------------------------------
+
+def find_toolchain():
+    """(gcc bin dir, make.exe) - from PATH, else from an STM32CubeIDE install."""
+    import glob
+    import shutil
+    gcc = shutil.which("arm-none-eabi-gcc")
+    make = shutil.which("make")
+    plugins = sorted(glob.glob("C:/ST/STM32CubeIDE*/STM32CubeIDE/plugins"), reverse=True)
+    for root in plugins:
+        if not gcc:
+            hits = glob.glob(root + "/*gnu-tools-for-stm32*win32*/tools/bin/arm-none-eabi-gcc.exe")
+            gcc = hits[0] if hits else None
+        if not make:
+            hits = glob.glob(root + "/*externaltools.make.win32*/tools/bin/make.exe")
+            make = hits[0] if hits else None
+    if not gcc or not make:
+        raise SystemExit("arm-none-eabi-gcc / make not found - install STM32CubeIDE or put "
+                         "the GNU Arm toolchain and make on PATH")
+    return str(Path(gcc).parent), make
+
+
+def fetch_baseline(dest):
+    """The zadanie_cv4 baseline (Makefile.ci, drivers, cv4 tests) as a plain folder."""
+    import tarfile
+    blob = api("repos/%s/tarball/%s" % (GRADER_REPO, BASELINE), raw=True)
+    with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as archive:
+        members = []
+        for member in archive.getmembers():
+            parts = member.name.split("/", 1)
+            if len(parts) < 2 or not parts[1] or not (member.isfile() or member.isdir()):
+                continue
+            member.name = parts[1]                # strip the "<owner>-<repo>-<sha>/" root
+            members.append(member)
+        archive.extractall(dest, members=members)
+
+
+def remove_tree(path):
+    """shutil.rmtree that also removes git's read-only object files on Windows."""
+    import os
+    import shutil
+    import stat
+
+    def make_writable(func, target, _):
+        os.chmod(target, stat.S_IWRITE)
+        func(target)
+
+    if Path(path).exists():
+        shutil.rmtree(path, onerror=make_writable)
+
+
+def grade_locally(job, out, baseline, gcc_bin, make):
+    """
+    Same as the CI workflow, on this PC: clone, overlay Src/ + Inc/ onto the baseline,
+    build with the baseline Makefile.ci, run the static + binary tests. Only C sources
+    come from the student and nothing of the student's is ever executed.
+    """
+    import os
+    import shutil
+    workdir = out / re.sub(r"[^\w.-]+", "-", job["repo"])
+    remove_tree(workdir)
+    student, proj = workdir / "student", workdir / "workspace"
+    results = proj / "results"
+
+    clone = subprocess.run(["gh", "repo", "clone", job["repo"], str(student), "--",
+                            "--quiet", "--depth", "1", "--branch", job["ref"],
+                            "-c", "core.longpaths=true"],   # deep docs/ trees
+                           capture_output=True, text=True)
+    if clone.returncode != 0:
+        job["error"] = "clone failed: %s" % clone.stderr.strip()[:200]
+        return
+
+    shutil.copytree(baseline, proj)
+    results.mkdir(parents=True, exist_ok=True)
+    src = student / job["subdir"] if job["subdir"] else student
+    for name in ("Src", "Inc"):
+        shutil.rmtree(proj / name, ignore_errors=True)
+        shutil.copytree(src / name, proj / name)
+    shutil.copytree(proj / "cv4", proj / "tests")
+    (results / "status.txt").write_text("ok")
+
+    env = dict(os.environ, PATH=gcc_bin + os.pathsep + str(Path(make).parent) + os.pathsep
+               + os.environ.get("PATH", ""))
+    build = subprocess.run([make, "-f", "Makefile.ci", "all"], cwd=proj, env=env,
+                           capture_output=True, text=True)
+    (results / "build.log").write_text(build.stdout + build.stderr, encoding="utf-8")
+    elf = proj / "build" / "usart_DMA.elf"
+    built = build.returncode == 0 and elf.exists()
+    if built:
+        tool = lambda name: str(Path(gcc_bin) / ("arm-none-eabi-%s.exe" % name))
+        for args, name in (([tool("objdump"), "-d", str(elf)], "disassembly.txt"),
+                           ([tool("nm"), "--numeric-sort", str(elf)], "symbols.txt"),
+                           ([tool("objdump"), "-s", "-j", ".isr_vector", str(elf)],
+                            "vectors.txt")):
+            with open(proj / name, "w", encoding="utf-8") as f:
+                subprocess.run(args, stdout=f, check=True)
+
+    suites = [("test_assignment.py", "static.xml")]
+    if built:
+        suites.append(("test_binary.py", "binary.xml"))
+    for suite, xml in suites:
+        subprocess.run([sys.executable, "-m", "pytest", "tests/" + suite, "-q", "--tb=no",
+                        "-p", "no:cacheprovider", "--junitxml=results/" + xml],
+                       cwd=proj, capture_output=True)
+
+    remove_tree(student)                          # keep only what was graded
+    job["state"] = "completed"
+    job["collected"] = True
+    score(job, workdir)
+
+
+def run_local(urls, out):
+    gcc_bin, make = find_toolchain()
+    baseline = out / "_baseline"
+    log("Fetching the %s baseline" % BASELINE)
+    fetch_baseline(baseline)
+    jobs = []
+    for url in urls:
+        try:
+            job = resolve(url)
+        except (ValueError, GhError) as exc:
+            job = {"url": url, "error": str(exc)}
+            log("  %-40s ERROR %s" % (url, exc))
+            jobs.append(job)
+            continue
+        job.update(with_hardware=False, local=True)
+        log("  %-32s branch %s, folder %s ..." % (job["repo"], job["ref"], job["subdir"] or "/"))
+        try:
+            grade_locally(job, out, baseline, gcc_bin, make)
+        except (OSError, subprocess.SubprocessError, ET.ParseError) as exc:
+            job["error"] = "local grading failed: %s" % exc
+        jobs.append(job)
+    return jobs
+
+
 def read_urls(args):
     urls = []
     for item in args.urls:
@@ -539,7 +676,22 @@ def main():
                         help="do not delete the grade/cv4/* trigger branches afterwards")
     parser.add_argument("--collect", metavar="DIR",
                         help="finish a previous batch whose runs were still going")
+    parser.add_argument("--local", action="store_true",
+                        help="grade on this PC only (static + binary, no hardware) - for "
+                             "private repos whose code must not reach the public runs")
     args = parser.parse_args()
+
+    if args.local:
+        urls = read_urls(args)
+        if not urls:
+            parser.error("no repo URLs given")
+        out = Path(args.out or datetime.datetime.now().strftime("grading-local-%Y%m%d-%H%M%S"))
+        out.mkdir(parents=True, exist_ok=True)
+        jobs = run_local(urls, out)
+        write_report(jobs, out)
+        print_summary(jobs)
+        log("\nReport: %s" % (out / "report.md").resolve())
+        return 0
 
     if args.collect:
         out = Path(args.collect)
