@@ -559,7 +559,10 @@ def remove_tree(path):
         func(target)
 
     if Path(path).exists():
-        shutil.rmtree(path, onerror=make_writable)
+        target = str(Path(path).resolve())
+        if os.name == "nt":
+            target = "\\\\?\\" + target           # past the 260-char path limit
+        shutil.rmtree(target, onerror=make_writable)
 
 
 def grade_locally(job, out, baseline, gcc_bin, make):
