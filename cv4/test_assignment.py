@@ -38,8 +38,96 @@ IT_C      = REPO_ROOT / "Src" / "stm32f3xx_it.c"
 # -- Helpers ------------------------------------------------------------------
 
 def _read(path: Path) -> str:
+    """
+    A source file as the compiler sees it, near enough: for .c files the code inside
+    inactive '#if' blocks is dropped and simple literal macros ('#', 35, 2000 ...) are
+    expanded, so "#define START_CHAR '#'" or a period defined in Inc/main.h count
+    exactly like the literal written in place.
+    """
     assert path.exists(), f"File not found: {path}"
-    return path.read_text(encoding="utf-8", errors="replace")
+    text = path.read_text(encoding="utf-8", errors="replace")
+    if path.suffix != ".c":
+        return text
+    defines = _collect_defines(text)
+    return _expand_literal_macros(_strip_inactive(_strip_comments(text), defines), defines)
+
+
+# Defined on the compiler command line by Makefile.ci
+BUILD_DEFINES = {"STM32F303x8": "", "DEBUG": "", "USE_FULL_LL_DRIVER": ""}
+_DEFINE_RE = re.compile(r"^[ \t]*#[ \t]*define[ \t]+([A-Za-z_]\w*)(?![\w(])[ \t]*(.*?)[ \t]*$",
+                        re.MULTILINE)
+_LITERAL_RE = re.compile(r"\(?\s*('(?:\\.|[^'\\])'|0[xX][0-9a-fA-F]+[uUlL]*|\d+[uUlL]*)\s*\)?")
+
+
+def _collect_defines(text: str) -> dict:
+    """Object-like macros of this file and of every header in Inc/."""
+    defines = dict(BUILD_DEFINES)
+    sources = [text] + [p.read_text(encoding="utf-8", errors="replace")
+                        for p in sorted((REPO_ROOT / "Inc").glob("*.h"))]
+    for source in sources:
+        for name, value in _DEFINE_RE.findall(_strip_comments(source)):
+            defines.setdefault(name, value)
+    return defines
+
+
+def _condition(kind: str, expr: str, defines: dict):
+    """True / False for the simple '#if' forms, None when it cannot be decided."""
+    expr = expr.strip()
+    if kind in ("ifdef", "ifndef"):
+        name = expr.split()[0] if expr else ""
+        return (name in defines) == (kind == "ifdef") if name else None
+    m = re.fullmatch(r"(!?)\s*defined\s*\(?\s*(\w+)\s*\)?", expr)
+    if m:
+        return (m.group(2) in defines) != bool(m.group(1))
+    m = re.fullmatch(r"(\d+)[uUlL]*", expr)
+    if m:
+        return int(m.group(1)) != 0
+    if re.fullmatch(r"[A-Za-z_]\w*", expr):
+        if expr not in defines:
+            return False                      # an undefined identifier is 0 in #if
+        m = re.fullmatch(r"\(?\s*(\d+)[uUlL]*\s*\)?", defines[expr])
+        return int(m.group(1)) != 0 if m else None
+    return None
+
+
+def _strip_inactive(text: str, defines: dict) -> str:
+    """Blank out the code of '#if' branches the compiler skips; undecidable ones stay."""
+    out, stack, active = [], [], True
+    for line in text.split("\n"):
+        m = re.match(r"\s*#\s*(ifdef|ifndef|if|elif|else|endif)\b(.*)", line)
+        if not m:
+            out.append(line if active else "")
+            continue
+        kind, expr = m.group(1), m.group(2)
+        if kind in ("if", "ifdef", "ifndef"):
+            value = _condition(kind, expr, defines)
+            stack.append({"parent": active, "taken": value is True})
+            active = active and value is not False
+        elif kind == "elif" and stack:
+            frame = stack[-1]
+            value = _condition("if", expr, defines)
+            active = frame["parent"] and not frame["taken"] and value is not False
+            frame["taken"] = frame["taken"] or value is True
+        elif kind == "else" and stack:
+            frame = stack[-1]
+            active = frame["parent"] and not frame["taken"]
+        elif kind == "endif" and stack:
+            active = stack.pop()["parent"]
+        out.append("")
+    return "\n".join(out)
+
+
+def _expand_literal_macros(text: str, defines: dict) -> str:
+    literal = {name: m.group(1) for name, value in defines.items()
+               if value and (m := _LITERAL_RE.fullmatch(value))}
+    if not literal:
+        return text
+    # Keep the name and append the value ("STRING_START '#'"), so a check for the
+    # macro name (DMA_USART2_BUFFER_SIZE) and a check for the literal both still match.
+    pattern = re.compile(r"\b(%s)\b" % "|".join(map(re.escape, literal)))
+    return "\n".join(line if re.match(r"\s*#", line) else
+                     pattern.sub(lambda m: "%s %s" % (m.group(1), literal[m.group(1)]), line)
+                     for line in text.split("\n"))
 
 
 def _strip_comments(text: str) -> str:
@@ -187,10 +275,11 @@ MODE_CIRC     = ("LL_DMA_MODE_CIRCULAR", "DMA_CCR_CIRC")
 DIR_P2M       = ("LL_DMA_DIRECTION_PERIPH_TO_MEMORY",)
 DIR_M2P       = ("LL_DMA_DIRECTION_MEMORY_TO_PERIPH",)
 MEM_INCREMENT = ("LL_DMA_MEMORY_INCREMENT", "DMA_CCR_MINC")
-SET_LENGTH    = ("LL_DMA_SetDataLength", "CNDTR")
+SET_LENGTH    = ("LL_DMA_SetDataLength", "CNDTR", "NbData")
 GET_LENGTH    = ("LL_DMA_GetDataLength", "CNDTR")
 SET_ADDRESS   = ("LL_DMA_ConfigAddresses", "LL_DMA_SetPeriphAddress",
-                 "LL_DMA_SetMemoryAddress", "CPAR", "CMAR")
+                 "LL_DMA_SetMemoryAddress", "CPAR", "CMAR",
+                 "PeriphOrM2MSrcAddress", "MemoryOrM2MDstAddress")    # LL_DMA_Init struct
 IT_TC         = ("LL_DMA_EnableIT_TC", "DMA_CCR_TCIE")
 IT_HT         = ("LL_DMA_EnableIT_HT", "DMA_CCR_HTIE")
 IT_IDLE       = ("LL_USART_EnableIT_IDLE", "USART_CR1_IDLEIE")
@@ -209,7 +298,7 @@ DELAY_CALLS   = ("LL_mDelay", "HAL_Delay", "LL_Init1msTick", "delay_ms", "LL_uDe
 
 
 def _usart_init_body():
-    return _function_body(_read(USART_C), "MX_USART2_UART_Init")
+    return _body_with_helpers(_read(USART_C), "MX_USART2_UART_Init")
 
 
 def _check_dma_body():
@@ -689,18 +778,27 @@ def test_callback_is_registered_in_main():
         "callback, USART2_CheckDmaReception has nowhere to send the received bytes and "
         "proccesDmaData is never executed."
     )
-    assert re.search(r"\bproccesDmaData\b", args), (
-        f"USART2_RegisterCallback is called with '{args.strip()}' instead of "
-        f"proccesDmaData. The callback must be the data-processing function."
+    # A callback that hands the bytes on to proccesDmaData (directly, or through a
+    # buffer that main() drains) delivers them just the same.
+    source = _read(MAIN_C)
+    callback = args.strip().lstrip("&").strip()
+    calls_process = re.compile(r"\bproccesDmaData\s*\(")
+    reached = (re.fullmatch(r"\(?\s*proccesDmaData\s*\)?", callback)
+               or calls_process.search(_body_with_helpers(source, callback) or "")
+               or calls_process.search(_body_with_helpers(source, "main") or ""))
+    assert reached, (
+        f"USART2_RegisterCallback is called with '{callback}', which never passes the "
+        f"received bytes on to proccesDmaData. Register proccesDmaData itself (or a "
+        f"callback that calls it)."
     )
 
 
 def test_valid_string_message_format():
     """Message format - 'Valid string: %s, lower-case: %d, upper-case: %d'."""
     text = _joined_format_text(_read(MAIN_C))
-    pattern = (r"Valid\s+string:\s*%[-+ #0-9.]*s\s*,\s*"
-               r"lower-case:\s*%[-+ #0-9.]*(?:h?[diu]|l[diu])\s*,\s*"
-               r"upper-case:\s*%[-+ #0-9.]*(?:h?[diu]|l[diu])")
+    pattern = (r"Valid\s+string:\s*%[-+ #0-9.*]*s\s*,\s*"
+               r"lower-case:\s*%[-+ #0-9.*]*(?:h?[diu]|l[diu])\s*,\s*"
+               r"upper-case:\s*%[-+ #0-9.*]*(?:h?[diu]|l[diu])")
     assert re.search(pattern, text, re.IGNORECASE), (
         "The message announcing a valid string does not match the required format.\n"
         "  expected: \"Valid string: %s, lower-case: %d, upper-case: %d\"\n"
@@ -733,8 +831,8 @@ def test_buffer_state_message_format():
     integer part and a fraction ("%u.%u%%") instead of with a float conversion.
     """
     text = _joined_format_text(_read(MAIN_C))
-    num = r"%[-+ #0-9.]*(?:h?[diu]|l[diu])"
-    load = rf"(?:%[-+ #0-9.]*[fgeFGE]|{num}\s*[.,]\s*{num})"
+    num = r"%[-+ #0-9.*]*(?:h?[diu]|l[diu])"
+    load = rf"(?:%[-+ #0-9.*]*[fgeFGE]|{num}\s*[.,]\s*{num})"
     pattern = (rf"Buffer\s+capacity:\s*{num}\s*bytes\s*,\s*"
                rf"occupied\s+memory:\s*{num}\s*bytes\s*,\s*"
                rf"load\s*\[\s*in\s*%\s*\]\s*:\s*{load}")
