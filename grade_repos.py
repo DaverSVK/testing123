@@ -128,20 +128,35 @@ def resolve(url):
         else:
             ref = info["default_branch"]
 
-    # By SHA - a branch name with '/' in it does not survive the URL path.
-    sha = heads[ref]
-    tree = api("repos/%s/git/trees/%s?recursive=1" % (repo, sha))
-    paths = {entry["path"] for entry in tree.get("tree", []) if entry["type"] == "blob"}
-    if tree.get("truncated"):
-        notes.append("repo tree too large to list completely")
+    def listing(branch):
+        # By SHA - a branch name with '/' in it does not survive the URL path.
+        tree = api("repos/%s/git/trees/%s?recursive=1" % (repo, heads[branch]))
+        if tree.get("truncated"):
+            notes.append("repo tree too large to list completely")
+        return {entry["path"] for entry in tree.get("tree", []) if entry["type"] == "blob"}
 
-    if subdir is None:
-        candidates = []
+    def projects(paths):
+        found = []
         for path in paths:
             if path.endswith(PROJECT_MARKERS[0]):
                 root = path[: -len(PROJECT_MARKERS[0])].rstrip("/")
                 if all((root + "/" + m if root else m) in paths for m in PROJECT_MARKERS):
-                    candidates.append(root)
+                    found.append(root)
+        return found
+
+    paths = listing(ref)
+    if subdir is None:
+        candidates = projects(paths)
+        if not candidates and not explicit:
+            # e.g. an empty default branch next to a "master" that holds the work
+            for other in branches:
+                if other != ref:
+                    other_paths = listing(other)
+                    if projects(other_paths):
+                        notes.append("no project on '%s', graded branch '%s'" % (ref, other))
+                        ref, paths = other, other_paths
+                        candidates = projects(paths)
+                        break
         if not candidates:
             raise ValueError("no project with %s on branch '%s'"
                              % (" + ".join(PROJECT_MARKERS), ref))
@@ -155,7 +170,7 @@ def resolve(url):
         raise ValueError("no %s in '%s' on branch '%s'"
                          % (" + ".join(PROJECT_MARKERS), subdir, ref))
 
-    return {"url": url, "repo": repo, "ref": ref, "subdir": subdir, "sha": sha,
+    return {"url": url, "repo": repo, "ref": ref, "subdir": subdir, "sha": heads[ref],
             "notes": notes}
 
 
