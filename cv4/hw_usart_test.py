@@ -195,8 +195,18 @@ class Board(object):
             return self._text[mark:]
 
     def write(self, data):
+        """
+        Never more than MAX_BURST characters at once - the assignment promises the
+        firmware that, and a correct solution may rely on it: re-arming the Rx channel
+        once fewer than 20 bytes are left is only safe if no burst is longer. A longer
+        burst runs past the end of a 128 byte buffer, overruns the USART and silences
+        every later case.
+        """
         if isinstance(data, str):
             data = data.encode("ascii")
+        if len(data) > MAX_BURST:
+            self.write_chunked(data)
+            return
         self._serial.write(data)
         self._serial.flush()
 
@@ -341,8 +351,10 @@ def build_cases():
           "ignored completely")
     frame("end_without_start", "$$$", None,
           "a bare '$' with no preceding '#' must not produce anything")
-    frame("restart_on_second_hash", "#abc#DEF$", "DEF",
-          "a second '#' restarts the set of characters")
+    # The assignment text does not say what a second '#' inside an open set means, so
+    # both readings score: it restarts the set, or it is an ordinary character.
+    frame("second_hash_inside_frame", "#abc#DEF$", ("DEF", "abc#DEF"),
+          "a second '#' either restarts the set of characters or is part of it")
 
     # 35-character window, the closing '$' counting as one of the 35.
     ok_payload = "B" * 34
@@ -377,10 +389,19 @@ def run_frame_cases(board, report):
                 "the firmware answered although %s" % case["why"]
             )
         else:
-            lower, upper = letter_counts(case["payload"])
+            accepted = case["payload"]
+            if isinstance(accepted, str):
+                accepted = (accepted,)
             match = board.wait_for(VALID_RE, REPLY_TIMEOUT, mark)
-            expected = "Valid string: %s, lower-case: %d, upper-case: %d" % (
-                case["payload"], lower, upper)
+            # Compare against the accepted reading the firmware chose, if any.
+            payload = accepted[0]
+            if match is not None and match.group(1) in accepted:
+                payload = match.group(1)
+            case = dict(case, payload=payload)
+            lower, upper = letter_counts(payload)
+            expected = " or ".join(
+                "Valid string: %s, lower-case: %d, upper-case: %d"
+                % ((p,) + letter_counts(p)) for p in accepted)
             if match is None:
                 ok = False
                 got = "<timeout: no reply within %.1f s>" % REPLY_TIMEOUT
